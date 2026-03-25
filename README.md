@@ -1,8 +1,8 @@
-# trllm
+# TRLLM
 
 Causal tracing for LLM and agent pipelines.
 
-trllm reconstructs **causal relationships** in LLM pipeline executions. Unlike tracing tools that capture chronological spans, trllm answers: *which inputs actually caused which outputs?*
+TRLLM reconstructs **causal relationships** in LLM pipeline executions. Unlike tracing tools that capture chronological spans, TRLLM answers: *which inputs actually caused which outputs?*
 
 Built on [PyRapide](https://pypi.org/project/pyrapide/) — a causal event-driven architecture library based on Stanford's RAPIDE 1.0 specification.
 
@@ -15,7 +15,7 @@ When an LLM agent pipeline runs (retrieval → reasoning → tool calls → synt
 - What the minimum causal path from query to answer looks like
 - If you removed a data source, which outputs would lose their grounding
 
-trllm fills this gap by modeling pipeline executions as **causal posets** — directed acyclic graphs where edges represent causal influence, not just temporal sequence.
+TRLLM fills this gap by modeling pipeline executions as **causal posets** — directed acyclic graphs where edges represent causal influence, not just temporal sequence.
 
 ## How It Works
 
@@ -195,7 +195,7 @@ Each event's `caused_by` list defines **explicit** causal links (what you know f
 
 ## Event Types
 
-trllm supports 16 event types covering the full lifecycle of RAG and agent pipelines:
+TRLLM supports 16 event types covering the full lifecycle of RAG and agent pipelines:
 
 | Category | Event Type | Description |
 |----------|-----------|-------------|
