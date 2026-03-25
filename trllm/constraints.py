@@ -1,4 +1,9 @@
-"""Pipeline constraints using PyRapide's pattern algebra."""
+"""Pipeline constraints using PyRapide's pattern algebra.
+
+Constraints are context-aware — they only fire when the relevant event
+types are present in the computation. A tool_completion constraint won't
+trigger in a pipeline that never makes tool calls.
+"""
 
 from __future__ import annotations
 
@@ -32,16 +37,32 @@ def llm_request_response_constraint():
     )
 
 
-PIPELINE_CONSTRAINTS = [
-    grounding_constraint(),
-    tool_completion_constraint(),
-    llm_request_response_constraint(),
+# Map constraint to the event types that must be present for it to apply
+CONSTRAINT_REGISTRY = [
+    {
+        "constraint": grounding_constraint,
+        "requires": {"chunk.injected", "final.response"},
+    },
+    {
+        "constraint": tool_completion_constraint,
+        "requires": {"tool.call"},
+    },
+    {
+        "constraint": llm_request_response_constraint,
+        "requires": {"llm.request", "llm.response"},
+    },
 ]
 
 
-def check_constraints(computation: Computation) -> list[dict]:
+def check_constraints(computation: Computation) -> list:
+    event_names = {e.name for e in computation.events}
+
     violations = []
-    for constraint in PIPELINE_CONSTRAINTS:
+    for entry in CONSTRAINT_REGISTRY:
+        # Only check constraints whose required event types are present
+        if not entry["requires"].issubset(event_names):
+            continue
+        constraint = entry["constraint"]()
         result = constraint.check(computation)
         violations.extend(result)
     return violations

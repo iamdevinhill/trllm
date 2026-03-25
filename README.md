@@ -63,7 +63,7 @@ Top 3 chunks selected (out of 5):
 
 Calling qwen3:30b...
 
-Building causal graph...
+Building causal graph (running entailment judge)...
 
 ============================================================
 CAUSAL GRAPH SUMMARY
@@ -71,11 +71,11 @@ CAUSAL GRAPH SUMMARY
 Computation: 11 events, 12 causal edges, depth 8, 1 root events, 1 leaf events
 
 ============================================================
-CAUSAL INFLUENCE SCORES
+ENTAILMENT-BASED CAUSAL SCORES
 ============================================================
-  [CAUSAL] doc1: confidence=0.814 | text=Python was created by Guido van Rossum and first released in...
-  [DEAD] doc5: confidence=0.269 | text=FastAPI is a modern Python web framework based on Starlette....
-  [DEAD] doc3: confidence=0.078 | text=Machine learning is a subset of artificial intelligence....
+  [CAUSAL] doc1: confidence=+1.00 | text=Python was created by Guido van Rossum and first released in...
+  [DEAD] doc5: confidence=+0.00 | text=FastAPI is a modern Python web framework based on Starlette....
+  [DEAD] doc3: confidence=+0.00 | text=Machine learning is a subset of artificial intelligence....
 
 ============================================================
 CONSTRAINT VIOLATIONS
@@ -224,6 +224,8 @@ One judge call evaluates all chunks at once. The same model used for generation 
 - Every final output must be grounded in a retrieved chunk
 - Every tool call must produce a result
 - Every LLM response must have a preceding request
+
+Constraints are **context-aware** — they only fire when the relevant event types are present. A `tool_completion` constraint won't trigger in a pipeline that never makes tool calls.
 
 ## Tech Stack
 
