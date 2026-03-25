@@ -1,4 +1,4 @@
-"""FastAPI server for CausalLens."""
+"""FastAPI server for TRLLM."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from trllm.api.models import CausalQuery, PipelineRun
 from trllm.constraints import check_constraints
 from trllm.events import CLEvent
 from trllm.graph import CausalGraphBuilder
-from trllm.linker import SemanticLinker
+from trllm.linker import EntailmentLinker
 
-app = FastAPI(title="CausalLens", version="0.1.0")
+app = FastAPI(title="TRLLM", version="0.1.0")
 
 # In-memory storage
 computations: dict[str, Computation] = {}
@@ -21,7 +21,7 @@ run_events: dict[str, list[CLEvent]] = {}
 
 # Shared instances
 ollama = OllamaAdapter()
-linker = SemanticLinker(ollama)
+linker = EntailmentLinker(ollama)
 builder = CausalGraphBuilder(linker)
 
 

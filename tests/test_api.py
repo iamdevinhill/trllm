@@ -7,13 +7,14 @@ from trllm.api import server
 from trllm.api.server import app, computations, run_events
 from trllm.events import CLEvent, EventType
 from trllm.graph import CausalGraphBuilder
-from trllm.linker import SemanticLinker
+from trllm.linker import EntailmentLinker
+
+import json
 
 
 class MockOllamaAdapter:
-    async def embed(self, model: str, text: str) -> list[float]:
-        h = hash(text) % 1000
-        return [h / 1000, (h * 7 % 1000) / 1000, (h * 13 % 1000) / 1000, (h * 31 % 1000) / 1000]
+    async def generate(self, model: str, prompt: str) -> dict:
+        return {"response": json.dumps([])}
 
     async def close(self):
         pass
@@ -22,7 +23,7 @@ class MockOllamaAdapter:
 @pytest.fixture(autouse=True)
 def mock_builder(monkeypatch):
     mock_ollama = MockOllamaAdapter()
-    mock_linker = SemanticLinker(mock_ollama, model="test", similarity_threshold=0.45)
+    mock_linker = EntailmentLinker(mock_ollama, judge_model="test")
     mock_builder = CausalGraphBuilder(mock_linker)
     monkeypatch.setattr(server, "builder", mock_builder)
     computations.clear()

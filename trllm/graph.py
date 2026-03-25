@@ -5,12 +5,12 @@ from __future__ import annotations
 from pyrapide import Computation, Event, Poset
 
 from trllm.events import CLEvent, EventType
-from trllm.linker import SemanticLinker
+from trllm.linker import EntailmentLinker
 
 
 class CausalGraphBuilder:
-    def __init__(self, semantic_linker: SemanticLinker):
-        self.linker = semantic_linker
+    def __init__(self, linker: EntailmentLinker):
+        self.linker = linker
 
     async def build(self, events: list[CLEvent]) -> Computation:
         poset = Poset()
@@ -37,7 +37,7 @@ class CausalGraphBuilder:
                         rapide_events[ev.id],
                     )
 
-        # Phase 3: Infer implicit causal links via semantic similarity
+        # Phase 3: Infer implicit causal links via entailment checking
         llm_responses = [e for e in events if e.event_type == EventType.LLM_RESPONSE]
         potential_causes = [
             e for e in events

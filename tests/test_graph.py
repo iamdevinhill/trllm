@@ -1,16 +1,19 @@
 """Tests for CausalGraphBuilder."""
 
+import json
+
 import pytest
 
 from trllm.events import CLEvent, EventType
 from trllm.graph import CausalGraphBuilder
-from trllm.linker import SemanticLinker
+from trllm.linker import EntailmentLinker
 
 
 class MockOllamaAdapter:
-    async def embed(self, model: str, text: str) -> list[float]:
-        h = hash(text) % 1000
-        return [h / 1000, (h * 7 % 1000) / 1000, (h * 13 % 1000) / 1000, (h * 31 % 1000) / 1000]
+    """Returns a judge response that marks all chunks as DEAD (no inferred edges)."""
+
+    async def generate(self, model: str, prompt: str) -> dict:
+        return {"response": json.dumps([])}
 
     async def close(self):
         pass
@@ -19,7 +22,7 @@ class MockOllamaAdapter:
 @pytest.fixture
 def builder():
     mock = MockOllamaAdapter()
-    linker = SemanticLinker(mock, model="test", similarity_threshold=0.45)
+    linker = EntailmentLinker(mock, judge_model="test")
     return CausalGraphBuilder(linker)
 
 

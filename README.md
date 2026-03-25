@@ -20,7 +20,7 @@ TRLLM fills this gap by modeling pipeline executions as **causal posets** — di
 ## How It Works
 
 1. **Instrument** your LLM pipeline to emit `CLEvent` objects at each step (query, retrieval, chunk injection, LLM call, tool use, final response)
-2. **Build** a causal graph — explicit causal links from your pipeline + inferred links from the **Semantic Linker**, which uses embedding similarity to determine whether an input actually influenced an output
+2. **Build** a causal graph — explicit causal links from your pipeline + inferred links from the **Entailment Linker**, which uses an LLM judge to verify whether specific claims in the output actually came from each input
 3. **Query** the graph — trace causes, find dead nodes, compute shortest causal paths, run counterfactual analysis
 4. **Enforce constraints** — declarative rules like "every output must be grounded in at least one retrieved chunk"
 
@@ -84,9 +84,10 @@ CONSTRAINT VIOLATIONS
 ```
 
 **Reading the output:**
-- **CAUSAL** — this input's embedding is semantically similar to the LLM output (above the 0.45 threshold). It actually influenced what the model produced.
-- **DEAD** — this input was present in the prompt but had no measurable influence on the output. It's dead weight — removing it would not change the result.
-- **Confidence scores** reflect cosine similarity between the input and output embeddings, multiplied by a type-based weight.
+- **CAUSAL** — the LLM judge determined that specific claims in the output came from this input (e.g. the date "1991" and name "Guido" trace back to doc1).
+- **DEAD** — this input was present in the prompt but no specific information from it appears in the output. Dead weight.
+- **HALLUCINATED_AGAINST** — the output directly contradicts a fact in this input (negative confidence score).
+- **Confidence scores** reflect the judge's assessment of how strongly the input contributed to the output.
 
 ### Run Tests
 
@@ -121,7 +122,7 @@ trllm/
 ├── trllm/
 │   ├── events.py          # CLEvent schema, 16 EventType values
 │   ├── graph.py           # CausalGraphBuilder → PyRapide Computation
-│   ├── linker.py          # SemanticLinker (embedding-based influence scoring)
+│   ├── linker.py          # EntailmentLinker (LLM judge-based causal verification)
 │   ├── constraints.py     # Pipeline constraints via PyRapide patterns
 │   ├── adapters/
 │   │   └── ollama.py      # Async Ollama HTTP adapter
@@ -132,7 +133,7 @@ trllm/
 │       └── renderer.py    # PyRapide visualization wrappers
 ├── demo/
 │   └── demo_pipeline.py   # End-to-end RAG demo
-├── tests/                 # 24 tests (all mocked, no Ollama needed)
+├── tests/                 # 26 tests (all mocked, no Ollama needed)
 └── dashboard/
     └── index.html         # Mermaid.js DAG viewer
 ```
@@ -146,13 +147,13 @@ import asyncio
 from trllm.adapters.ollama import OllamaAdapter
 from trllm.events import CLEvent, EventType
 from trllm.graph import CausalGraphBuilder
-from trllm.linker import SemanticLinker
+from trllm.linker import EntailmentLinker
 from trllm.constraints import check_constraints
 from trllm.visualization.renderer import render_summary
 
 async def my_pipeline():
     ollama = OllamaAdapter()
-    linker = SemanticLinker(ollama)
+    linker = EntailmentLinker(ollama)
     builder = CausalGraphBuilder(linker)
 
     events = []
@@ -191,7 +192,7 @@ async def my_pipeline():
 asyncio.run(my_pipeline())
 ```
 
-Each event's `caused_by` list defines **explicit** causal links (what you know from your pipeline logic). The Semantic Linker then adds **inferred** causal links by comparing embeddings — detecting which inputs actually influenced the LLM output even if you didn't explicitly wire them.
+Each event's `caused_by` list defines **explicit** causal links (what you know from your pipeline logic). The Entailment Linker then adds **inferred** causal links by asking an LLM judge to trace specific claims in the output back to their source inputs.
 
 ## Event Types
 
@@ -210,9 +211,14 @@ TRLLM supports 16 event types covering the full lifecycle of RAG and agent pipel
 
 ## Key Concepts
 
-**Semantic Linker** — The core differentiator. Uses embedding cosine similarity between pipeline inputs and outputs to assign causal confidence scores. Applies type-based weighting (tool results get 1.3x, reasoning steps get 1.2x, chunks get 1.1x). Threshold at 0.45 — below that, an input is not considered causal.
+**Entailment Linker** — The core differentiator. Instead of cosine similarity (which only measures topical overlap — a hallucinated response about Python scores just as high as a grounded one), the linker uses an LLM judge to trace each specific claim in the response back to its source chunk. This catches:
+- **True grounding** — "response says 1991, chunk says 1991" → CAUSAL
+- **Dead weight** — chunk about FastAPI, response doesn't use it → DEAD
+- **Hallucination** — "response says Linus Torvalds, chunk says Guido" → HALLUCINATED_AGAINST (negative score)
 
-**Causal Graph Builder** — Combines explicit causal links (from your pipeline instrumentation) with inferred links (from the semantic linker) into a PyRapide `Computation`. Supports both Engine-driven (live) and post-hoc (recorded) graph construction.
+One judge call evaluates all chunks at once. The same model used for generation can serve as the judge.
+
+**Causal Graph Builder** — Combines explicit causal links (from your pipeline instrumentation) with inferred links (from the entailment linker) into a PyRapide `Computation`. Supports both Engine-driven (live) and post-hoc (recorded) graph construction.
 
 **Constraints** — Declarative rules using PyRapide's pattern algebra (`>>` for causal sequence):
 - Every final output must be grounded in a retrieved chunk
@@ -225,7 +231,7 @@ TRLLM supports 16 event types covering the full lifecycle of RAG and agent pipel
 - **Ollama** — local LLM inference + embeddings
 - **FastAPI** — async API layer
 - **httpx** — async HTTP client
-- **numpy** — cosine similarity
+- **numpy** — cosine similarity (retrieval in demo)
 - **networkx** / **pydantic** — via PyRapide
 
 ## License

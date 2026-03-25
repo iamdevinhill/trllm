@@ -1,6 +1,7 @@
 """
-CausalLens Demo — A minimal RAG pipeline with causal tracing.
-Uses Ollama for both the LLM (qwen3:30b) and embeddings (qwen3-embedding:0.6b).
+TRLLM Demo — A minimal RAG pipeline with entailment-based causal tracing.
+Uses Ollama for the LLM (qwen3:30b), embeddings for retrieval (qwen3-embedding:0.6b),
+and the same LLM as the entailment judge.
 
 Run: python demo/demo_pipeline.py
 Requires: Ollama running at localhost:11434 with qwen3:30b and qwen3-embedding:0.6b pulled.
@@ -8,11 +9,13 @@ Requires: Ollama running at localhost:11434 with qwen3:30b and qwen3-embedding:0
 
 import asyncio
 
+import numpy as np
+
 from trllm.adapters.ollama import OllamaAdapter
 from trllm.constraints import check_constraints
 from trllm.events import CLEvent, EventType
 from trllm.graph import CausalGraphBuilder
-from trllm.linker import SemanticLinker
+from trllm.linker import EntailmentLinker
 from trllm.visualization.renderer import render_summary
 
 # Simulated document store
@@ -28,9 +31,17 @@ LLM_MODEL = "qwen3:30b"
 EMBED_MODEL = "qwen3-embedding:0.6b"
 
 
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    a_arr, b_arr = np.array(a), np.array(b)
+    norm_a, norm_b = np.linalg.norm(a_arr), np.linalg.norm(b_arr)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(np.dot(a_arr, b_arr) / (norm_a * norm_b))
+
+
 async def run_demo():
     ollama = OllamaAdapter()
-    linker = SemanticLinker(ollama, model=EMBED_MODEL)
+    linker = EntailmentLinker(ollama, judge_model=LLM_MODEL)
     builder = CausalGraphBuilder(linker)
 
     events: list[CLEvent] = []
@@ -67,7 +78,7 @@ async def run_demo():
     scored_docs = []
     for doc in DOCUMENTS:
         doc_embedding = await ollama.embed(EMBED_MODEL, doc["text"])
-        sim = linker._cosine_similarity(query_embedding, doc_embedding)
+        sim = cosine_similarity(query_embedding, doc_embedding)
         scored_docs.append((doc, sim))
 
     scored_docs.sort(key=lambda x: x[1], reverse=True)
@@ -140,8 +151,8 @@ async def run_demo():
     )
     events.append(end_event)
 
-    # 9. Build causal graph
-    print("\nBuilding causal graph...")
+    # 9. Build causal graph (includes entailment-based influence scoring)
+    print("\nBuilding causal graph (running entailment judge)...")
     computation = await builder.build(events)
 
     # 10. Print results
@@ -156,14 +167,19 @@ async def run_demo():
     print(llm_output)
 
     print("\n" + "=" * 60)
-    print("CAUSAL INFLUENCE SCORES")
+    print("ENTAILMENT-BASED CAUSAL SCORES")
     print("=" * 60)
     scored = await linker.score_influence(chunk_events, response_event)
     for chunk_event, confidence in sorted(scored, key=lambda x: x[1], reverse=True):
-        status = "CAUSAL" if confidence >= linker.similarity_threshold else "DEAD"
+        if confidence < 0:
+            status = "HALLUCINATED_AGAINST"
+        elif confidence > 0:
+            status = "CAUSAL"
+        else:
+            status = "DEAD"
         print(
             f"  [{status}] {chunk_event.payload['chunk_id']}: "
-            f"confidence={confidence:.3f} | "
+            f"confidence={confidence:+.2f} | "
             f"text={chunk_event.payload['text'][:60]}..."
         )
 
