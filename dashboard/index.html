@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CausalLens — DAG Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; display: flex; height: 100vh; }
+        #sidebar {
+            width: 320px; background: #161b22; border-right: 1px solid #30363d;
+            padding: 16px; overflow-y: auto; flex-shrink: 0;
+        }
+        #sidebar h2 { font-size: 14px; color: #8b949e; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        #main { flex: 1; display: flex; flex-direction: column; }
+        #toolbar {
+            padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+            display: flex; gap: 12px; align-items: center;
+        }
+        #toolbar label { font-size: 13px; color: #8b949e; }
+        #toolbar input, #toolbar select, #toolbar button {
+            background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+            padding: 6px 10px; border-radius: 6px; font-size: 13px;
+        }
+        #toolbar button { cursor: pointer; background: #238636; border-color: #238636; color: #fff; }
+        #toolbar button:hover { background: #2ea043; }
+        #graph-container { flex: 1; overflow: auto; padding: 24px; display: flex; justify-content: center; }
+        #graph-container .mermaid { max-width: 100%; }
+        #event-details {
+            background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+            padding: 12px; margin-bottom: 8px; font-size: 13px; cursor: pointer;
+        }
+        #event-details:hover { border-color: #58a6ff; }
+        .event-name { color: #58a6ff; font-weight: 600; }
+        .event-source { color: #8b949e; font-size: 12px; }
+        .causal { border-left: 3px solid #3fb950; }
+        .dead { border-left: 3px solid #f85149; }
+        .violation { border-left: 3px solid #d29922; }
+        #status { padding: 8px 16px; font-size: 12px; color: #8b949e; background: #161b22; border-top: 1px solid #30363d; }
+        pre { white-space: pre-wrap; font-size: 12px; color: #8b949e; margin-top: 4px; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>Events</h2>
+        <div id="event-list">
+            <p style="color: #8b949e; font-size: 13px;">Load a run to see events.</p>
+        </div>
+        <h2 style="margin-top: 16px;">Violations</h2>
+        <div id="violation-list">
+            <p style="color: #8b949e; font-size: 13px;">No violations.</p>
+        </div>
+    </div>
+    <div id="main">
+        <div id="toolbar">
+            <label>Run ID:</label>
+            <input type="text" id="run-id" placeholder="Enter run ID" value="">
+            <button onclick="loadRun()">Load</button>
+            <select id="format" onchange="loadRun()">
+                <option value="mermaid">Mermaid</option>
+                <option value="ascii">ASCII</option>
+            </select>
+        </div>
+        <div id="graph-container">
+            <div class="mermaid" id="graph">
+                graph TD
+                    A[Load a run to view its causal graph]
+            </div>
+        </div>
+        <div id="status">Ready</div>
+    </div>
+
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+
+        const API = window.location.origin;
+
+        async function loadRun() {
+            const runId = document.getElementById('run-id').value.trim();
+            if (!runId) return;
+
+            const format = document.getElementById('format').value;
+            document.getElementById('status').textContent = `Loading run ${runId}...`;
+
+            try {
+                // Load visualization
+                const vizResp = await fetch(`${API}/runs/${runId}/visualization?format=${format}`);
+                if (!vizResp.ok) throw new Error(`Run not found: ${runId}`);
+                const vizData = await vizResp.json();
+
+                const container = document.getElementById('graph-container');
+                if (format === 'mermaid') {
+                    const { svg } = await mermaid.render('rendered-graph', vizData.mermaid);
+                    container.innerHTML = svg;
+                } else {
+                    container.innerHTML = `<pre>${vizData.ascii || vizData.summary}</pre>`;
+                }
+
+                // Load constraints
+                const conResp = await fetch(`${API}/runs/${runId}/constraints`);
+                const conData = await conResp.json();
+                const vList = document.getElementById('violation-list');
+                if (conData.all_passed) {
+                    vList.innerHTML = '<p style="color: #3fb950;">All constraints passed.</p>';
+                } else {
+                    vList.innerHTML = conData.violations.map(v =>
+                        `<div id="event-details" class="violation">${v}</div>`
+                    ).join('');
+                }
+
+                // Load dead nodes
+                const deadResp = await fetch(`${API}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ run_id: runId, question_type: 'dead_nodes' }),
+                });
+                const deadData = await deadResp.json();
+                const deadIds = new Set(deadData.dead_events.map(e => e.id));
+
+                // Build event list (from the query result we have dead nodes)
+                const eList = document.getElementById('event-list');
+                eList.innerHTML = deadData.dead_events.map(e =>
+                    `<div id="event-details" class="dead">
+                        <span class="event-name">${e.name}</span>
+                        <span class="event-source">${e.source}</span>
+                        <pre>Keys: ${e.payload_keys.join(', ')}</pre>
+                    </div>`
+                ).join('') || '<p style="color: #3fb950;">No dead events — all events are causally connected.</p>';
+
+                document.getElementById('status').textContent = `Loaded run ${runId} — ${format} view`;
+            } catch (err) {
+                document.getElementById('status').textContent = `Error: ${err.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

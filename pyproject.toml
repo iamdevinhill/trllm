@@ -1,0 +1,26 @@
+[project]
+name = "trllm"
+version = "0.1.0"
+description = "Causal tracing for LLM/agent pipelines"
+requires-python = ">=3.11"
+dependencies = [
+    "pyrapide>=0.2.1",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "httpx>=0.27.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["trllm*"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
