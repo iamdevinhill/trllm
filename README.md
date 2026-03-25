@@ -29,7 +29,7 @@ TRLLM fills this gap by modeling pipeline executions as **causal posets** — di
 ### Requirements
 
 - Python 3.11+
-- [Ollama](https://ollama.ai) running locally (for the demo and semantic linking)
+- [Ollama](https://ollama.ai) running locally (for the demo and entailment judge)
 
 ### Install
 
@@ -43,7 +43,7 @@ pip install -e ".[dev]"
 
 ```bash
 ollama pull qwen3:30b          # LLM for demo pipeline
-ollama pull qwen3-embedding:0.6b   # Embeddings for semantic linker
+ollama pull qwen3-embedding:0.6b   # Embeddings for retrieval in demo
 ```
 
 ### Run the Demo
