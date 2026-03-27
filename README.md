@@ -6,7 +6,7 @@ TRLLM reconstructs **causal relationships** in LLM pipeline executions. Unlike t
 
 Built on [PyRapide](https://pypi.org/project/pyrapide/) — a causal event-driven architecture library based on Stanford's RAPIDE 1.0 specification.
 
-![TRLLM Dashboard](demo.png)
+![TRLLM Dashboard](trllm.png)
 
 ## The Problem
 
