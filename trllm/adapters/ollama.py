@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+
 import httpx
 
 
 class OllamaAdapter:
-    def __init__(self, ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, ollama_base_url: str | None = None):
+        ollama_base_url = ollama_base_url or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         self.base_url = ollama_base_url
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
 

@@ -9,6 +9,7 @@ Requires: Ollama running at localhost:11434 with qwen3:30b and qwen3-embedding:0
 
 import asyncio
 
+import httpx
 import numpy as np
 
 from trllm.adapters.ollama import OllamaAdapter
@@ -151,11 +152,28 @@ async def run_demo():
     )
     events.append(end_event)
 
-    # 9. Build causal graph (includes entailment-based influence scoring)
-    print("\nBuilding causal graph (running entailment judge)...")
+    # 9. Push to API server (if running) so the dashboard can display it
+    run_id = "demo-rag-1"
+    api_url = "http://localhost:8000"
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                f"{api_url}/ingest",
+                json={"run_id": run_id, "events": [e.to_dict() for e in events]},
+                timeout=30.0,
+            )
+            if resp.status_code == 200:
+                print(f"\nIngested run '{run_id}' to API — view at {api_url}/dashboard")
+            else:
+                print(f"\nAPI ingest returned {resp.status_code} — dashboard won't have this run")
+    except httpx.ConnectError:
+        print(f"\nAPI server not running at {api_url} — skipping dashboard ingest")
+
+    # 10. Build causal graph (includes entailment-based influence scoring)
+    print("Building causal graph (running entailment judge)...")
     computation = await builder.build(events)
 
-    # 10. Print results
+    # 11. Print results
     print("\n" + "=" * 60)
     print("CAUSAL GRAPH SUMMARY")
     print("=" * 60)

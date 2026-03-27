@@ -6,6 +6,8 @@ TRLLM reconstructs **causal relationships** in LLM pipeline executions. Unlike t
 
 Built on [PyRapide](https://pypi.org/project/pyrapide/) — a causal event-driven architecture library based on Stanford's RAPIDE 1.0 specification.
 
+![TRLLM Dashboard](demo.png)
+
 ## The Problem
 
 When an LLM agent pipeline runs (retrieval → reasoning → tool calls → synthesis), existing observability tools show you a timeline. They cannot tell you:
@@ -42,11 +44,27 @@ pip install -e ".[dev]"
 ### Pull Ollama Models
 
 ```bash
-ollama pull qwen3:30b          # LLM for demo pipeline
+ollama pull qwen3:30b              # LLM for demo pipeline
 ollama pull qwen3-embedding:0.6b   # Embeddings for retrieval in demo
 ```
 
-### Run the Demo
+### Run the Dashboard
+
+```bash
+uvicorn trllm.api.server:app --reload
+```
+
+Open `http://localhost:8000/dashboard` and click **Run Demo**. The dashboard streams progress in real time via SSE as the pipeline runs: embedding, retrieval, LLM generation, entailment scoring, and causal graph construction. The result is an interactive 3D force-directed graph you can orbit, zoom, and click to trace causal ancestry.
+
+### Run with Docker
+
+```bash
+docker compose up --build
+```
+
+The container exposes port 8000 and connects to Ollama on the host via `OLLAMA_HOST`.
+
+### Run the CLI Demo
 
 ```bash
 python demo/demo_pipeline.py
@@ -97,13 +115,16 @@ pytest tests/ -v
 
 Tests use mocked Ollama calls — no running Ollama instance required.
 
-### Start the API Server
+## Dashboard
 
-```bash
-uvicorn trllm.api.server:app --reload
-```
+The built-in dashboard at `/dashboard` provides:
 
-Then open `http://localhost:8000/docs` for the interactive API docs, or `http://localhost:8000/dashboard` for the DAG viewer.
+- **3D causal graph** — interactive force-directed graph (Three.js + 3d-force-graph) with glowing nodes, orbit controls, and animated causal flow particles
+- **Causal ancestry tracing** — click any node to highlight its full causal ancestry with a camera fly-to
+- **Streaming pipeline execution** — run the demo directly from the UI with real-time SSE progress updates
+- **Entailment scores** — sidebar showing per-chunk causal/dead/hallucinated verdicts with confidence bars
+- **Constraint violations** — live constraint checking results
+- **Reset View** — button to restore the initial graph layout
 
 ## API Endpoints
 
@@ -113,7 +134,9 @@ Then open `http://localhost:8000/docs` for the interactive API docs, or `http://
 | `POST` | `/query` | Query the causal graph (`what_caused`, `dead_nodes`, `min_path`, `counterfactual`) |
 | `GET` | `/runs/{id}/visualization` | Get Mermaid, ASCII, or DOT visualization |
 | `GET` | `/runs/{id}/constraints` | Check constraint violations |
-| `GET` | `/dashboard` | DAG viewer UI |
+| `GET` | `/runs/{id}/graph` | Get graph nodes and edges for visualization |
+| `GET` | `/demo/run` | Run the built-in RAG demo (SSE stream) |
+| `GET` | `/dashboard` | Interactive 3D causal trace viewer |
 
 ## Project Structure
 
@@ -125,17 +148,20 @@ trllm/
 │   ├── linker.py          # EntailmentLinker (LLM judge-based causal verification)
 │   ├── constraints.py     # Pipeline constraints via PyRapide patterns
 │   ├── adapters/
-│   │   └── ollama.py      # Async Ollama HTTP adapter
+│   │   └── ollama.py      # Async Ollama HTTP adapter (supports OLLAMA_HOST env var)
 │   ├── api/
 │   │   ├── models.py      # Pydantic request/response models
-│   │   └── server.py      # FastAPI endpoints
+│   │   └── server.py      # FastAPI endpoints + SSE demo runner
 │   └── visualization/
 │       └── renderer.py    # PyRapide visualization wrappers
 ├── demo/
-│   └── demo_pipeline.py   # End-to-end RAG demo
+│   └── demo_pipeline.py   # End-to-end RAG demo (CLI + API ingest)
 ├── tests/                 # 26 tests (all mocked, no Ollama needed)
-└── dashboard/
-    └── index.html         # Mermaid.js DAG viewer
+├── dashboard/
+│   └── index.html         # 3D force-directed causal graph viewer
+├── Dockerfile
+├── docker-compose.yml
+└── pyproject.toml
 ```
 
 ## Instrumenting Your Own Pipeline
@@ -176,7 +202,7 @@ async def my_pipeline():
 
     # ... add LLM_REQUEST, LLM_RESPONSE, FINAL_RESPONSE, etc.
 
-    # 2. Build the causal graph (adds semantic-inferred links automatically)
+    # 2. Build the causal graph (adds entailment-inferred links automatically)
     computation = await builder.build(events)
 
     # 3. Inspect results
@@ -231,10 +257,11 @@ Constraints are **context-aware** — they only fire when the relevant event typ
 
 - **PyRapide** — causal event modeling (posets, patterns, constraints, visualization)
 - **Ollama** — local LLM inference + embeddings
-- **FastAPI** — async API layer
+- **FastAPI** — async API layer with SSE streaming
+- **Three.js / 3d-force-graph** — interactive 3D causal graph visualization
 - **httpx** — async HTTP client
 - **numpy** — cosine similarity (retrieval in demo)
-- **networkx** / **pydantic** — via PyRapide
+- **Docker** — containerized deployment
 
 ## License
 
