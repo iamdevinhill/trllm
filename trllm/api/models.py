@@ -1,4 +1,4 @@
-"""Pydantic request/response models for the CausalLens API."""
+"""Pydantic request/response models for the TRLLM API."""
 
 from __future__ import annotations
 

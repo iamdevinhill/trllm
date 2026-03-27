@@ -52,7 +52,7 @@ class CausalGraphBuilder:
         for response_event in llm_responses:
             scored = await self.linker.score_influence(potential_causes, response_event)
             for cause_event, confidence in scored:
-                if confidence >= self.linker.similarity_threshold:
+                if confidence >= self.linker.confidence_threshold:
                     cause_re = rapide_events[cause_event.id]
                     effect_re = rapide_events[response_event.id]
                     # Avoid duplicate edges (may already exist from explicit caused_by)
@@ -66,7 +66,7 @@ class CausalGraphBuilder:
     def build_from_rapide_events(
         self, rapide_events: list[Event], causal_pairs: list[tuple[Event, Event]]
     ) -> Computation:
-        """Build a Computation directly from PyRapide Events (no semantic linking)."""
+        """Build a Computation directly from PyRapide Events (no entailment linking)."""
         poset = Poset()
         for ev in rapide_events:
             poset.add(ev)

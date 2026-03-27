@@ -47,7 +47,7 @@ class EntailmentLinker:
     ):
         self.ollama = ollama
         self.judge_model = judge_model
-        self.similarity_threshold = 0.45  # kept for interface compat with graph builder
+        self.confidence_threshold = 0.45
 
     async def score_influence(
         self, inputs: list[CLEvent], output: CLEvent

@@ -1,4 +1,4 @@
-"""CausalLens event schema and types."""
+"""TRLLM event schema and types."""
 
 from __future__ import annotations
 
