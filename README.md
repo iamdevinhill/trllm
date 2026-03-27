@@ -54,7 +54,7 @@ ollama pull qwen3-embedding:0.6b   # Embeddings for retrieval in demo
 uvicorn trllm.api.server:app --reload
 ```
 
-Open `http://localhost:8000/dashboard` and click **Run Demo**. The dashboard streams progress in real time via SSE as the pipeline runs: embedding, retrieval, LLM generation, entailment scoring, and causal graph construction. The result is an interactive 3D force-directed graph you can orbit, zoom, and click to trace causal ancestry.
+Open `http://localhost:8000/dashboard`, enter your own query and documents (or use the defaults), select a pipeline type, and click **Run Pipeline**. The dashboard streams progress in real time via SSE and renders an interactive 3D force-directed graph you can orbit, zoom, and click to trace causal ancestry.
 
 ### Run with Docker
 
@@ -119,12 +119,25 @@ Tests use mocked Ollama calls — no running Ollama instance required.
 
 The built-in dashboard at `/dashboard` provides:
 
+- **Custom inputs** — enter your own query, paste your own documents (one per line), choose LLM/embed models, and set top-K retrieval count
+- **Pipeline selection** — choose between RAG (simple linear) and Agent (multi-step branching with tool calls, reasoning, and synthesis)
 - **3D causal graph** — interactive force-directed graph (Three.js + 3d-force-graph) with glowing nodes, orbit controls, and animated causal flow particles
 - **Causal ancestry tracing** — click any node to highlight its full causal ancestry with a camera fly-to
-- **Streaming pipeline execution** — run the demo directly from the UI with real-time SSE progress updates
+- **Streaming execution** — real-time SSE progress updates as the pipeline runs
 - **Entailment scores** — sidebar showing per-chunk causal/dead/hallucinated verdicts with confidence bars
 - **Constraint violations** — live constraint checking results
-- **Reset View** — button to restore the initial graph layout
+
+### Pipeline Types
+
+**RAG Pipeline** — linear path: query → retrieve → assemble prompt → LLM → response. Good for testing basic retrieval grounding.
+
+**Agent Pipeline** — branching multi-step graph:
+- Query → planning LLM (decomposes question into sub-questions)
+- Plan branches into parallel paths: tool call (knowledge lookup) + document retrieval
+- Both paths merge at a reasoning step (evidence evaluation)
+- Reasoning + plan feed into a synthesis LLM for the final answer
+
+This produces a graph with branching, merging, multiple LLM calls, tool use, and reasoning nodes.
 
 ## API Endpoints
 
@@ -135,7 +148,7 @@ The built-in dashboard at `/dashboard` provides:
 | `GET` | `/runs/{id}/visualization` | Get Mermaid, ASCII, or DOT visualization |
 | `GET` | `/runs/{id}/constraints` | Check constraint violations |
 | `GET` | `/runs/{id}/graph` | Get graph nodes and edges for visualization |
-| `GET` | `/demo/run` | Run the built-in RAG demo (SSE stream) |
+| `POST` | `/demo/run` | Run a pipeline with custom query/documents (SSE stream) |
 | `GET` | `/dashboard` | Interactive 3D causal trace viewer |
 
 ## Project Structure

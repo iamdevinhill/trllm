@@ -82,6 +82,12 @@
             color: var(--text-primary); padding: 7px 10px; border-radius: 6px; font-size: 12px; width: 160px;
         }
         .toolbar-input:focus { outline: none; border-color: var(--accent); }
+        .toolbar-select {
+            background: var(--bg-tertiary); border: 1px solid var(--border);
+            color: var(--text-primary); padding: 7px 10px; border-radius: 6px; font-size: 12px;
+            cursor: pointer;
+        }
+        .toolbar-select:focus { outline: none; border-color: var(--accent); }
         .separator { width: 1px; height: 20px; background: var(--border); }
 
         #graph-wrapper { flex: 1; position: relative; overflow: hidden; min-height: 0; }
@@ -118,6 +124,23 @@
         .progress-step.done .dot { background:var(--green); border-color:var(--green); }
         .progress-step.active .dot { border-color:var(--accent); animation:pulse 1s infinite; }
         .progress-step.done { color:var(--text-primary); }
+
+        /* Input panel */
+        #input-panel {
+            background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+            padding: 0; max-height: 0; overflow: hidden; transition: max-height 0.3s, padding 0.3s;
+        }
+        #input-panel.open { max-height: 400px; padding: 12px 20px; overflow-y: auto; }
+        #input-panel label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; display: block; margin-bottom: 4px; }
+        #input-panel input, #input-panel textarea {
+            width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border);
+            color: var(--text-primary); padding: 8px 10px; border-radius: 6px; font-size: 12px;
+            font-family: inherit; resize: vertical;
+        }
+        #input-panel input:focus, #input-panel textarea:focus { outline: none; border-color: var(--accent); }
+        .input-row { display: flex; gap: 12px; margin-bottom: 10px; }
+        .input-row > div { flex: 1; }
+        .input-hint { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
 
         /* Hint overlay */
         #controls-hint {
@@ -156,19 +179,53 @@
     </div>
     <div id="right">
         <div id="toolbar">
-            <button class="btn btn-primary" onclick="runDemo()" id="demo-btn">Run Demo</button>
+            <select class="toolbar-select" id="pipeline-select">
+                <option value="rag">RAG Pipeline</option>
+                <option value="agent">Agent Pipeline</option>
+            </select>
+            <button class="btn btn-primary" onclick="runDemo()" id="demo-btn">Run Pipeline</button>
+            <button class="btn btn-secondary" onclick="toggleInputPanel()" id="input-toggle">Configure</button>
             <div class="separator"></div>
             <input type="text" class="toolbar-input" id="run-id" placeholder="Run ID">
             <button class="btn btn-secondary" onclick="loadRun()">Load</button>
             <div class="separator"></div>
             <button class="btn btn-secondary" onclick="resetGraph()">Reset View</button>
         </div>
+        <div id="input-panel">
+            <div style="margin-bottom:10px">
+                <label>Query</label>
+                <input type="text" id="input-query" value="What year was Python created and who made it?" placeholder="Your question...">
+            </div>
+            <div style="margin-bottom:10px">
+                <label>Documents <span style="font-weight:400;text-transform:none">(one per line)</span></label>
+                <textarea id="input-docs" rows="6" placeholder="Paste your documents here, one per line...">Python was created by Guido van Rossum and first released in 1991.
+The capital of France is Paris, known for the Eiffel Tower.
+Machine learning is a subset of artificial intelligence.
+Tennessee is known as the Volunteer State.
+FastAPI is a modern Python web framework based on Starlette.</textarea>
+                <div class="input-hint">Leave empty to use default documents. Each line becomes a separate chunk for retrieval.</div>
+            </div>
+            <div class="input-row">
+                <div>
+                    <label>LLM Model</label>
+                    <input type="text" id="input-llm-model" value="qwen3:30b" placeholder="e.g. qwen3:30b">
+                </div>
+                <div>
+                    <label>Embed Model</label>
+                    <input type="text" id="input-embed-model" value="qwen3-embedding:0.6b" placeholder="e.g. qwen3-embedding:0.6b">
+                </div>
+                <div>
+                    <label>Top K</label>
+                    <input type="number" id="input-top-k" value="3" min="1" max="20" style="width:60px">
+                </div>
+            </div>
+        </div>
         <div id="progress"><div id="progress-steps"></div></div>
         <div id="graph-wrapper">
             <div id="graph-3d"></div>
             <div id="empty-state">
                 <div class="icon">&#9672;</div>
-                <div>Click <strong>Run Demo</strong> to trace a RAG pipeline</div>
+                <div>Click <strong>Run Pipeline</strong> to trace a RAG or agent pipeline</div>
             </div>
             <div id="controls-hint" style="display:none;">
                 <kbd>Left drag</kbd> Orbit &nbsp; <kbd>Right drag</kbd> Pan &nbsp; <kbd>Scroll</kbd> Zoom<br>
@@ -491,49 +548,117 @@
         }
     }
 
-    function runDemo() {
+    function toggleInputPanel() {
+        var panel = document.getElementById('input-panel');
+        panel.classList.toggle('open');
+        document.getElementById('input-toggle').textContent = panel.classList.contains('open') ? 'Hide Config' : 'Configure';
+    }
+
+    function buildRequestBody() {
+        var query = document.getElementById('input-query').value.trim();
+        var docsText = document.getElementById('input-docs').value.trim();
+        var llmModel = document.getElementById('input-llm-model').value.trim();
+        var embedModel = document.getElementById('input-embed-model').value.trim();
+        var topK = parseInt(document.getElementById('input-top-k').value) || 3;
+
+        var pipeline = document.getElementById('pipeline-select').value;
+        var body = { query: query || undefined, top_k: topK, pipeline: pipeline };
+        if (llmModel) body.llm_model = llmModel;
+        if (embedModel) body.embed_model = embedModel;
+        if (docsText) {
+            body.documents = docsText.split('\n').filter(function(l) { return l.trim(); }).map(function(line, i) {
+                return { id: 'doc' + (i + 1), text: line.trim() };
+            });
+        }
+        return body;
+    }
+
+    function handleSSEData(data, btn) {
+        switch (data.step) {
+            case 'status':
+                setStatus(data.message, true);
+                var msg = data.message;
+                var isAgent = document.getElementById('pipeline-select').value === 'agent';
+                if (isAgent) {
+                    if (msg.indexOf('Planning') >= 0) updateProgress(0);
+                    else if (msg.indexOf('tool call') >= 0 || msg.indexOf('Embedding') >= 0) updateProgress(1);
+                    else if (msg.indexOf('Reasoning') >= 0 || msg.indexOf('evaluating') >= 0) updateProgress(2);
+                    else if (msg.indexOf('Synthesizing') >= 0) updateProgress(3);
+                    else if (msg.indexOf('entailment judge') >= 0) updateProgress(4);
+                    else if (msg.indexOf('Scoring') >= 0) updateProgress(5);
+                } else {
+                    if (msg.indexOf('Embedding') >= 0) updateProgress(0);
+                    else if (msg.indexOf('Calling') >= 0) updateProgress(2);
+                    else if (msg.indexOf('entailment judge') >= 0) updateProgress(3);
+                    else if (msg.indexOf('Scoring') >= 0) updateProgress(4);
+                }
+                break;
+            case 'retrieval':
+                updateProgress(1); setStatus(data.message, true); break;
+            case 'llm_response':
+                document.getElementById('llm-output').innerHTML =
+                    '<div class="card output"><div class="text">' + escapeHtml(data.output) + '</div></div>';
+                break;
+            case 'scores':
+                renderScores(data.scores); break;
+            case 'complete':
+                hideProgress();
+                setStatus('Complete: ' + data.event_count + ' events, run ' + data.run_id, false);
+                document.getElementById('run-id').value = data.run_id;
+                renderScores(data.scores);
+                renderViolations(data.violations, data.all_passed);
+                renderGraph(data.graph);
+                btn.disabled = false; btn.textContent = 'Run Pipeline';
+                return true;
+        }
+        return false;
+    }
+
+    async function runDemo() {
         var btn = document.getElementById('demo-btn');
         btn.disabled = true; btn.textContent = 'Running...';
         setStatus('Starting pipeline...', true);
-        showProgress(['Embedding query & documents','Retrieving relevant chunks','Calling LLM','Running entailment judge','Building causal graph']);
+        var pipeline = document.getElementById('pipeline-select').value;
+        if (pipeline === 'agent') {
+            showProgress(['Planning query','Tool call & retrieval','Evaluating evidence','Synthesizing answer','Running entailment judge','Building causal graph']);
+        } else {
+            showProgress(['Embedding query & documents','Retrieving relevant chunks','Calling LLM','Running entailment judge','Building causal graph']);
+        }
         updateProgress(0);
 
-        var evtSource = new EventSource(API + '/demo/run');
-        evtSource.onmessage = function(event) {
-            var data = JSON.parse(event.data);
-            switch (data.step) {
-                case 'status':
-                    setStatus(data.message, true);
-                    if (data.message.indexOf('Embedding') >= 0) updateProgress(0);
-                    else if (data.message.indexOf('Calling') >= 0) updateProgress(2);
-                    else if (data.message.indexOf('entailment judge') >= 0) updateProgress(3);
-                    else if (data.message.indexOf('Scoring') >= 0) updateProgress(4);
-                    break;
-                case 'retrieval':
-                    updateProgress(1); setStatus(data.message, true); break;
-                case 'llm_response':
-                    document.getElementById('llm-output').innerHTML =
-                        '<div class="card output"><div class="text">' + escapeHtml(data.output) + '</div></div>';
-                    break;
-                case 'scores':
-                    renderScores(data.scores); break;
-                case 'complete':
-                    hideProgress();
-                    setStatus('Complete: ' + data.event_count + ' events, run ' + data.run_id, false);
-                    document.getElementById('run-id').value = data.run_id;
-                    renderScores(data.scores);
-                    renderViolations(data.violations, data.all_passed);
-                    renderGraph(data.graph);
-                    btn.disabled = false; btn.textContent = 'Run Demo';
-                    evtSource.close();
-                    break;
+        try {
+            var response = await fetch(API + '/demo/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildRequestBody()),
+            });
+
+            var reader = response.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+
+            while (true) {
+                var result = await reader.read();
+                if (result.done) break;
+                buffer += decoder.decode(result.value, { stream: true });
+
+                var lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i].trim();
+                    if (line.indexOf('data: ') === 0) {
+                        try {
+                            var data = JSON.parse(line.substring(6));
+                            if (handleSSEData(data, btn)) return;
+                        } catch(e) {}
+                    }
+                }
             }
-        };
-        evtSource.onerror = function() {
-            evtSource.close();
-            setStatus('Error: connection lost', false);
-            btn.disabled = false; btn.textContent = 'Run Demo';
-        };
+        } catch(err) {
+            setStatus('Error: ' + err.message, false);
+        }
+        btn.disabled = false; btn.textContent = 'Run Pipeline';
     }
 
     function loadRun() {
