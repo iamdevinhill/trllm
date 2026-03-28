@@ -7,9 +7,9 @@ COPY pyproject.toml README.md ./
 COPY trllm/__init__.py trllm/__init__.py
 RUN pip install --no-cache-dir .
 
-# Copy full source
+# Copy full source and reinstall in place
 COPY . .
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir --no-deps .
 
 EXPOSE 8000
 

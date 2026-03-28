@@ -25,6 +25,11 @@ dependencies = [
     "sse-starlette>=1.6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/iamdevinhill/trllm"
+Repository = "https://github.com/iamdevinhill/trllm"
+Issues = "https://github.com/iamdevinhill/trllm/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",

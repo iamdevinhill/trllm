@@ -54,7 +54,7 @@ ruff check trllm/ tests/
 - `trllm/adapters/` — LLM provider adapters (currently Ollama)
 - `trllm/visualization/` — rendering wrappers
 - `demo/` — end-to-end demo pipeline
-- `dashboard/` — Mermaid.js DAG viewer
+- `dashboard/` — 3D force-directed causal graph viewer
 - `tests/` — test suite
 
 ## Reporting Issues
