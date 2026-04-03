@@ -162,7 +162,6 @@ class DemoRequest(BaseModel):
     top_k: int = 3
     llm_model: str = DEMO_LLM_MODEL
     embed_model: str = DEMO_EMBED_MODEL
-    pipeline: str = "agent"
 
 
 def _emit(step, data):
@@ -211,121 +210,6 @@ async def _finalize(events, chunk_events, response_event, req, run_id_prefix):
         "all_passed": len(violations) == 0,
         "graph": graph_data,
     })
-
-
-async def _rag_pipeline(req, documents):
-    """Simple RAG: query → retrieve → assemble → LLM → response."""
-    events: list[CLEvent] = []
-
-    yield _emit("status", {"message": "Starting RAG pipeline..."})
-
-    start_event = CLEvent(
-        event_type=EventType.PIPELINE_START,
-        payload={"pipeline": "rag"},
-        source="pipeline",
-    )
-    events.append(start_event)
-
-    user_query = req.query
-    query_event = CLEvent(
-        event_type=EventType.USER_QUERY,
-        payload={"text": user_query},
-        source="user",
-        caused_by=[start_event],
-    )
-    events.append(query_event)
-
-    retrieval_event = CLEvent(
-        event_type=EventType.RETRIEVAL_REQUEST,
-        payload={"query": user_query},
-        source="retriever",
-        caused_by=[query_event],
-    )
-    events.append(retrieval_event)
-
-    yield _emit("status", {"message": "Embedding query and documents..."})
-
-    query_embedding = await ollama.embed(req.embed_model, user_query)
-    scored_docs = []
-    for doc in documents:
-        doc_embedding = await ollama.embed(req.embed_model, doc["text"])
-        sim = _cosine_similarity(query_embedding, doc_embedding)
-        scored_docs.append((doc, sim))
-
-    scored_docs.sort(key=lambda x: x[1], reverse=True)
-    top_chunks = scored_docs[:req.top_k]
-
-    yield _emit("retrieval", {
-        "message": f"Retrieved top {len(top_chunks)} chunks",
-        "chunks": [
-            {"id": doc["id"], "similarity": round(sim, 3), "text": doc["text"][:80]}
-            for doc, sim in top_chunks
-        ],
-    })
-
-    chunk_events = []
-    for doc, score in top_chunks:
-        chunk_event = CLEvent(
-            event_type=EventType.CHUNK_INJECTED,
-            payload={"chunk_id": doc["id"], "text": doc["text"], "score": score},
-            source="retriever",
-            caused_by=[retrieval_event],
-        )
-        events.append(chunk_event)
-        chunk_events.append(chunk_event)
-
-    context_text = "\n".join(ce.payload["text"] for ce in chunk_events)
-    prompt = f"Context:\n{context_text}\n\nQuestion: {user_query}\nAnswer:"
-
-    prompt_event = CLEvent(
-        event_type=EventType.PROMPT_ASSEMBLED,
-        payload={"prompt": prompt, "chunk_count": len(chunk_events)},
-        source="pipeline",
-        caused_by=chunk_events,
-    )
-    events.append(prompt_event)
-
-    request_event = CLEvent(
-        event_type=EventType.LLM_REQUEST,
-        payload={"model": req.llm_model, "prompt": prompt},
-        source="llm",
-        caused_by=[prompt_event],
-    )
-    events.append(request_event)
-
-    yield _emit("status", {"message": f"Calling {req.llm_model}..."})
-
-    result = await ollama.generate(req.llm_model, prompt)
-    llm_output = result["response"]
-
-    yield _emit("llm_response", {"message": "LLM responded", "output": llm_output})
-
-    response_event = CLEvent(
-        event_type=EventType.LLM_RESPONSE,
-        payload={"output": llm_output, "model": req.llm_model},
-        source="llm",
-        caused_by=[request_event],
-    )
-    events.append(response_event)
-
-    final_event = CLEvent(
-        event_type=EventType.FINAL_RESPONSE,
-        payload={"text": llm_output},
-        source="pipeline",
-        caused_by=[response_event],
-    )
-    events.append(final_event)
-
-    end_event = CLEvent(
-        event_type=EventType.PIPELINE_END,
-        payload={"event_count": len(events)},
-        source="pipeline",
-        caused_by=[final_event],
-    )
-    events.append(end_event)
-
-    async for msg in _finalize(events, chunk_events, response_event, req, "rag"):
-        yield msg
 
 
 async def _agent_pipeline(req, documents):
@@ -562,9 +446,7 @@ async def run_demo(req: DemoRequest):
         if "id" not in doc:
             doc["id"] = f"doc{i+1}"
 
-    if req.pipeline == "agent":
-        return EventSourceResponse(_agent_pipeline(req, documents))
-    return EventSourceResponse(_rag_pipeline(req, documents))
+    return EventSourceResponse(_agent_pipeline(req, documents))
 
 
 @app.get("/runs/{run_id}/graph")

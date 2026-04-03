@@ -173,7 +173,7 @@ For advanced use cases, the lower-level `CLEvent`, `CausalGraphBuilder`, `Entail
 
 ## Event Types
 
-TRLLM supports 17 event types covering the full lifecycle of RAG and agent pipelines:
+TRLLM supports 17 event types covering the full lifecycle of agent pipelines:
 
 | Category | Event Type | Description |
 |----------|-----------|-------------|
