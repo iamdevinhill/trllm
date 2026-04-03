@@ -44,7 +44,7 @@ pip install -e ".[dev]"
 ### Pull Ollama Models
 
 ```bash
-ollama pull qwen3:30b              # LLM for demo pipeline
+ollama pull qwen3:8b              # LLM for demo pipeline
 ollama pull qwen3-embedding:0.6b   # Embeddings for retrieval in demo
 ```
 
@@ -54,7 +54,7 @@ ollama pull qwen3-embedding:0.6b   # Embeddings for retrieval in demo
 uvicorn trllm.api.server:app --reload
 ```
 
-Open `http://localhost:8000/dashboard`, enter your own query and documents (or use the defaults), select a pipeline type, and click **Run Pipeline**. The dashboard streams progress in real time via SSE and renders an interactive 3D force-directed graph you can orbit, zoom, and click to trace causal ancestry.
+Open `http://localhost:8000/dashboard`, enter your own query and documents (or use the defaults), and click **Run Pipeline**. The agent pipeline plans the query, runs tool calls and retrieval in parallel, evaluates evidence, and synthesizes an answer. The dashboard streams progress in real time via SSE and renders an interactive 3D force-directed graph you can orbit, zoom, and click to trace causal ancestry.
 
 ### Run with Docker
 
@@ -70,39 +70,10 @@ The container exposes port 8000 and connects to Ollama on the host via `OLLAMA_H
 python demo/demo_pipeline.py
 ```
 
-This runs a RAG pipeline against a small document store, builds the causal graph, and prints which chunks actually influenced the output:
-
-```
-Embedding query and documents...
-Top 3 chunks selected (out of 5):
-  doc1: similarity=0.811 — Python was created by Guido van Rossum and first released in...
-  doc5: similarity=0.464 — FastAPI is a modern Python web framework based on Starlette....
-  doc3: similarity=0.305 — Machine learning is a subset of artificial intelligence....
-
-Calling qwen3:30b...
-
-Building causal graph (running entailment judge)...
-
-============================================================
-CAUSAL GRAPH SUMMARY
-============================================================
-Computation: 11 events, 12 causal edges, depth 8, 1 root events, 1 leaf events
-
-============================================================
-ENTAILMENT-BASED CAUSAL SCORES
-============================================================
-  [CAUSAL] doc1: confidence=+1.00 | text=Python was created by Guido van Rossum and first released in...
-  [DEAD] doc5: confidence=+0.00 | text=FastAPI is a modern Python web framework based on Starlette....
-  [DEAD] doc3: confidence=+0.00 | text=Machine learning is a subset of artificial intelligence....
-
-============================================================
-CONSTRAINT VIOLATIONS
-============================================================
-  All constraints passed.
-```
+This runs the same agent pipeline as the dashboard: query planning, parallel tool call + retrieval, evidence evaluation, synthesis, and entailment scoring. Output shows which inputs were causally relevant, which were dead weight, and whether any constraints were violated.
 
 **Reading the output:**
-- **CAUSAL** — the LLM judge determined that specific claims in the output came from this input (e.g. the date "1991" and name "Guido" trace back to doc1).
+- **CAUSAL** — the LLM judge determined that specific claims in the output came from this input (e.g. "Phobos and Deimos" and "Asaph Hall in 1877" trace back to doc1).
 - **DEAD** — this input was present in the prompt but no specific information from it appears in the output. Dead weight.
 - **HALLUCINATED_AGAINST** — the output directly contradicts a fact in this input (negative confidence score).
 - **Confidence scores** reflect the judge's assessment of how strongly the input contributed to the output.
@@ -120,24 +91,12 @@ Tests use mocked Ollama calls — no running Ollama instance required.
 The built-in dashboard at `/dashboard` provides:
 
 - **Custom inputs** — enter your own query, paste your own documents (one per line), choose LLM/embed models, and set top-K retrieval count
-- **Pipeline selection** — choose between RAG (simple linear) and Agent (multi-step branching with tool calls, reasoning, and synthesis)
+- **Agent pipeline** — multi-step branching graph: planning LLM, parallel tool call + retrieval, evidence evaluation, synthesis LLM
 - **3D causal graph** — interactive force-directed graph (Three.js + 3d-force-graph) with glowing nodes, orbit controls, and animated causal flow particles
 - **Causal ancestry tracing** — click any node to highlight its full causal ancestry with a camera fly-to
 - **Streaming execution** — real-time SSE progress updates as the pipeline runs
 - **Entailment scores** — sidebar showing per-chunk causal/dead/hallucinated verdicts with confidence bars
 - **Constraint violations** — live constraint checking results
-
-### Pipeline Types
-
-**RAG Pipeline** — linear path: query → retrieve → assemble prompt → LLM → response. Good for testing basic retrieval grounding.
-
-**Agent Pipeline** — branching multi-step graph:
-- Query → planning LLM (decomposes question into sub-questions)
-- Plan branches into parallel paths: tool call (knowledge lookup) + document retrieval
-- Both paths merge at a reasoning step (evidence evaluation)
-- Reasoning + plan feed into a synthesis LLM for the final answer
-
-This produces a graph with branching, merging, multiple LLM calls, tool use, and reasoning nodes.
 
 ## API Endpoints
 
@@ -156,7 +115,8 @@ This produces a graph with branching, merging, multiple LLM calls, tool use, and
 ```
 trllm/
 ├── trllm/
-│   ├── events.py          # CLEvent schema, 16 EventType values
+│   ├── tracer.py          # High-level Tracer SDK
+│   ├── events.py          # CLEvent schema, 17 EventType values
 │   ├── graph.py           # CausalGraphBuilder → PyRapide Computation
 │   ├── linker.py          # EntailmentLinker (LLM judge-based causal verification)
 │   ├── constraints.py     # Pipeline constraints via PyRapide patterns
@@ -168,8 +128,8 @@ trllm/
 │   └── visualization/
 │       └── renderer.py    # PyRapide visualization wrappers
 ├── demo/
-│   └── demo_pipeline.py   # End-to-end RAG demo (CLI + API ingest)
-├── tests/                 # 26 tests (all mocked, no Ollama needed)
+│   └── demo_pipeline.py   # End-to-end agent pipeline demo (CLI)
+├── tests/                 # 45 tests (all mocked, no Ollama needed)
 ├── dashboard/
 │   └── index.html         # 3D force-directed causal graph viewer
 ├── Dockerfile
@@ -179,63 +139,41 @@ trllm/
 
 ## Instrumenting Your Own Pipeline
 
-Create `CLEvent` objects at each step, linking them with `caused_by`:
+Use the `Tracer` SDK to add causal tracing to any pipeline:
 
 ```python
 import asyncio
-from trllm.adapters.ollama import OllamaAdapter
-from trllm.events import CLEvent, EventType
-from trllm.graph import CausalGraphBuilder
-from trllm.linker import EntailmentLinker
-from trllm.constraints import check_constraints
-from trllm.visualization.renderer import render_summary
+from trllm import Tracer
 
 async def my_pipeline():
-    ollama = OllamaAdapter()
-    linker = EntailmentLinker(ollama)
-    builder = CausalGraphBuilder(linker)
+    async with Tracer(llm_model="qwen3:8b") as tracer:
+        with tracer.trace() as t:
+            # Record each step of your pipeline
+            t.query("How many moons does Mars have and what are their names?")
+            t.chunk("doc1", "Mars has two small moons called Phobos and Deimos, discovered in 1877.")
+            t.chunk("doc2", "Mars has three moons: Phobos, Deimos, and Titan.")
+            t.tool_call("lookup", input="mars moons", output="Mars has two moons: Phobos and Deimos.")
+            t.llm_call(prompt="Context: ... Question: How many moons does Mars have?", response="Mars has two moons: Phobos and Deimos...")
+            t.response("Mars has two moons: Phobos and Deimos.")
 
-    events = []
+        # Analyze: builds causal graph, runs entailment judge, checks constraints
+        result = await tracer.analyze()
 
-    # 1. Emit events at each pipeline step, linking causes
-    query = CLEvent(
-        event_type=EventType.USER_QUERY,
-        payload={"text": "What is Python?"},
-        source="user",
-    )
-    events.append(query)
-
-    chunk = CLEvent(
-        event_type=EventType.CHUNK_INJECTED,
-        payload={"text": "Python is a programming language created in 1991."},
-        source="retriever",
-        caused_by=[query],  # explicit causal link
-    )
-    events.append(chunk)
-
-    # ... add LLM_REQUEST, LLM_RESPONSE, FINAL_RESPONSE, etc.
-
-    # 2. Build the causal graph (adds entailment-inferred links automatically)
-    computation = await builder.build(events)
-
-    # 3. Inspect results
-    print(render_summary(computation))
-
-    # 4. Check constraints
-    violations = check_constraints(computation)
-    for v in violations:
-        print(f"VIOLATION: {v}")
-
-    await ollama.close()
+        for s in result.scores:
+            print(f"[{s['verdict']}] {s['chunk_id']}: {s['confidence']:+.2f}")
+        for v in result.violations:
+            print(f"VIOLATION: {v}")
 
 asyncio.run(my_pipeline())
 ```
 
-Each event's `caused_by` list defines **explicit** causal links (what you know from your pipeline logic). The Entailment Linker then adds **inferred** causal links by asking an LLM judge to trace specific claims in the output back to their source inputs.
+The `Tracer` handles all the wiring: event creation, causal linking, graph construction, entailment scoring, and constraint checking. Each method (`query`, `chunk`, `tool_call`, `llm_call`, `response`, `reasoning`, `agent_delegate`) records an event and automatically links it to the previous step. You can also pass explicit `caused_by` lists for custom causal structures.
+
+For advanced use cases, the lower-level `CLEvent`, `CausalGraphBuilder`, `EntailmentLinker`, and `check_constraints` APIs are still available.
 
 ## Event Types
 
-TRLLM supports 16 event types covering the full lifecycle of RAG and agent pipelines:
+TRLLM supports 17 event types covering the full lifecycle of RAG and agent pipelines:
 
 | Category | Event Type | Description |
 |----------|-----------|-------------|
@@ -251,9 +189,9 @@ TRLLM supports 16 event types covering the full lifecycle of RAG and agent pipel
 ## Key Concepts
 
 **Entailment Linker** — The core differentiator. Instead of cosine similarity (which only measures topical overlap — a hallucinated response about Python scores just as high as a grounded one), the linker uses an LLM judge to trace each specific claim in the response back to its source chunk. This catches:
-- **True grounding** — "response says 1991, chunk says 1991" → CAUSAL
-- **Dead weight** — chunk about FastAPI, response doesn't use it → DEAD
-- **Hallucination** — "response says Linus Torvalds, chunk says Guido" → HALLUCINATED_AGAINST (negative score)
+- **True grounding** — "response says Phobos and Deimos, chunk says Phobos and Deimos" → CAUSAL
+- **Dead weight** — chunk about Olympus Mons, response doesn't use it → DEAD
+- **Hallucination** — "response says two moons, chunk says three moons including Titan" → HALLUCINATED_AGAINST (negative score)
 
 One judge call evaluates all chunks at once. The same model used for generation can serve as the judge.
 

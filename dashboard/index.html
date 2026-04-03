@@ -142,6 +142,16 @@
         .input-row > div { flex: 1; }
         .input-hint { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
 
+        /* Run history */
+        .run-item {
+            cursor: pointer; transition: border-color 0.2s;
+        }
+        .run-item:hover { border-color: var(--accent); }
+        .run-item.active { border-color: var(--accent); border-left: 3px solid var(--accent); }
+        .run-item .run-id { font-weight: 600; font-size: 11px; color: var(--accent); }
+        .run-item .run-query { color: var(--text-secondary); font-size: 10px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .run-item .run-meta { color: var(--text-muted); font-size: 10px; margin-top: 2px; }
+
         /* Hint overlay */
         #controls-hint {
             position: absolute; top: 12px; left: 12px;
@@ -164,8 +174,12 @@
         </div>
         <div id="sidebar-content">
             <div class="section">
+                <div class="section-label">Run History</div>
+                <div id="run-history"><div class="card"><div class="meta">No runs yet.</div></div></div>
+            </div>
+            <div class="section">
                 <div class="section-label">Entailment Scores</div>
-                <div id="score-list"><div class="card"><div class="meta">Run the demo to see entailment scores.</div></div></div>
+                <div id="score-list"><div class="card"><div class="meta">Run a pipeline to see entailment scores.</div></div></div>
             </div>
             <div class="section">
                 <div class="section-label">LLM Output</div>
@@ -179,36 +193,30 @@
     </div>
     <div id="right">
         <div id="toolbar">
-            <select class="toolbar-select" id="pipeline-select">
-                <option value="rag">RAG Pipeline</option>
-                <option value="agent">Agent Pipeline</option>
-            </select>
             <button class="btn btn-primary" onclick="runDemo()" id="demo-btn">Run Pipeline</button>
             <button class="btn btn-secondary" onclick="toggleInputPanel()" id="input-toggle">Configure</button>
             <div class="separator"></div>
-            <input type="text" class="toolbar-input" id="run-id" placeholder="Run ID">
-            <button class="btn btn-secondary" onclick="loadRun()">Load</button>
-            <div class="separator"></div>
+            <button class="btn btn-secondary" onclick="resetAll()">New Run</button>
             <button class="btn btn-secondary" onclick="resetGraph()">Reset View</button>
         </div>
         <div id="input-panel">
             <div style="margin-bottom:10px">
                 <label>Query</label>
-                <input type="text" id="input-query" value="What year was Python created and who made it?" placeholder="Your question...">
+                <input type="text" id="input-query" value="How many moons does Mars have and what are their names?" placeholder="Your question...">
             </div>
             <div style="margin-bottom:10px">
                 <label>Documents <span style="font-weight:400;text-transform:none">(one per line)</span></label>
-                <textarea id="input-docs" rows="6" placeholder="Paste your documents here, one per line...">Python was created by Guido van Rossum and first released in 1991.
-The capital of France is Paris, known for the Eiffel Tower.
-Machine learning is a subset of artificial intelligence.
-Tennessee is known as the Volunteer State.
-FastAPI is a modern Python web framework based on Starlette.</textarea>
+                <textarea id="input-docs" rows="6" placeholder="Paste your documents here, one per line...">Mars has two small moons called Phobos and Deimos, discovered by Asaph Hall in 1877.
+Jupiter is the largest planet in our solar system with at least 95 known moons.
+Phobos orbits Mars at a distance of only 6,000 km and is slowly spiraling inward.
+Mars has three moons: Phobos, Deimos, and Titan.
+The Martian surface features Olympus Mons, the tallest volcano in the solar system.</textarea>
                 <div class="input-hint">Leave empty to use default documents. Each line becomes a separate chunk for retrieval.</div>
             </div>
             <div class="input-row">
                 <div>
                     <label>LLM Model</label>
-                    <input type="text" id="input-llm-model" value="qwen3:30b" placeholder="e.g. qwen3:30b">
+                    <input type="text" id="input-llm-model" value="qwen3:8b" placeholder="e.g. qwen3:8b">
                 </div>
                 <div>
                     <label>Embed Model</label>
@@ -225,7 +233,7 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
             <div id="graph-3d"></div>
             <div id="empty-state">
                 <div class="icon">&#9672;</div>
-                <div>Click <strong>Run Pipeline</strong> to trace a RAG or agent pipeline</div>
+                <div>Click <strong>Run Pipeline</strong> to trace an agent pipeline</div>
             </div>
             <div id="controls-hint" style="display:none;">
                 <kbd>Left drag</kbd> Orbit &nbsp; <kbd>Right drag</kbd> Pan &nbsp; <kbd>Scroll</kbd> Zoom<br>
@@ -257,6 +265,8 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
     var highlightedNodes = new Set();
     var highlightedLinks = new Set();
     var hoverNode = null;
+    var runHistory = [];  // { id, query, eventCount, scores, violations, allPassed, graph }
+    var activeRunId = null;
 
     var TYPE_COLORS = {
         'pipeline.start': '#6b7d93', 'pipeline.end': '#6b7d93',
@@ -561,8 +571,7 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
         var embedModel = document.getElementById('input-embed-model').value.trim();
         var topK = parseInt(document.getElementById('input-top-k').value) || 3;
 
-        var pipeline = document.getElementById('pipeline-select').value;
-        var body = { query: query || undefined, top_k: topK, pipeline: pipeline };
+        var body = { query: query || undefined, top_k: topK, pipeline: 'agent' };
         if (llmModel) body.llm_model = llmModel;
         if (embedModel) body.embed_model = embedModel;
         if (docsText) {
@@ -578,20 +587,12 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
             case 'status':
                 setStatus(data.message, true);
                 var msg = data.message;
-                var isAgent = document.getElementById('pipeline-select').value === 'agent';
-                if (isAgent) {
-                    if (msg.indexOf('Planning') >= 0) updateProgress(0);
-                    else if (msg.indexOf('tool call') >= 0 || msg.indexOf('Embedding') >= 0) updateProgress(1);
-                    else if (msg.indexOf('Reasoning') >= 0 || msg.indexOf('evaluating') >= 0) updateProgress(2);
-                    else if (msg.indexOf('Synthesizing') >= 0) updateProgress(3);
-                    else if (msg.indexOf('entailment judge') >= 0) updateProgress(4);
-                    else if (msg.indexOf('Scoring') >= 0) updateProgress(5);
-                } else {
-                    if (msg.indexOf('Embedding') >= 0) updateProgress(0);
-                    else if (msg.indexOf('Calling') >= 0) updateProgress(2);
-                    else if (msg.indexOf('entailment judge') >= 0) updateProgress(3);
-                    else if (msg.indexOf('Scoring') >= 0) updateProgress(4);
-                }
+                if (msg.indexOf('Planning') >= 0) updateProgress(0);
+                else if (msg.indexOf('tool call') >= 0 || msg.indexOf('Embedding') >= 0) updateProgress(1);
+                else if (msg.indexOf('Reasoning') >= 0 || msg.indexOf('evaluating') >= 0) updateProgress(2);
+                else if (msg.indexOf('Synthesizing') >= 0) updateProgress(3);
+                else if (msg.indexOf('entailment judge') >= 0) updateProgress(4);
+                else if (msg.indexOf('Scoring') >= 0) updateProgress(5);
                 break;
             case 'retrieval':
                 updateProgress(1); setStatus(data.message, true); break;
@@ -604,26 +605,103 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
             case 'complete':
                 hideProgress();
                 setStatus('Complete: ' + data.event_count + ' events, run ' + data.run_id, false);
-                document.getElementById('run-id').value = data.run_id;
                 renderScores(data.scores);
                 renderViolations(data.violations, data.all_passed);
                 renderGraph(data.graph);
+                addRunToHistory(data);
                 btn.disabled = false; btn.textContent = 'Run Pipeline';
                 return true;
         }
         return false;
     }
 
+    function addRunToHistory(data) {
+        var query = document.getElementById('input-query').value.trim() || '(default query)';
+        var run = {
+            id: data.run_id,
+            query: query,
+            eventCount: data.event_count,
+            scores: data.scores,
+            violations: data.violations,
+            allPassed: data.all_passed,
+            graph: data.graph,
+        };
+        // Replace if same id exists, otherwise prepend
+        var existing = runHistory.findIndex(function(r) { return r.id === run.id; });
+        if (existing >= 0) runHistory[existing] = run;
+        else runHistory.unshift(run);
+        activeRunId = run.id;
+        renderRunHistory();
+    }
+
+    function renderRunHistory() {
+        var el = document.getElementById('run-history');
+        if (runHistory.length === 0) {
+            el.innerHTML = '<div class="card"><div class="meta">No runs yet.</div></div>';
+            return;
+        }
+        el.innerHTML = runHistory.map(function(r) {
+            var active = r.id === activeRunId ? ' active' : '';
+            var causal = r.scores.filter(function(s) { return s.verdict === 'CAUSAL'; }).length;
+            var dead = r.scores.filter(function(s) { return s.verdict === 'DEAD'; }).length;
+            return '<div class="card run-item' + active + '" onclick="selectRun(\'' + r.id + '\')">'
+                + '<div class="run-id">' + r.id + '</div>'
+                + '<div class="run-query">' + escapeHtml(r.query) + '</div>'
+                + '<div class="run-meta">' + r.eventCount + ' events · ' + causal + ' causal · ' + dead + ' dead</div>'
+                + '</div>';
+        }).join('');
+    }
+
+    function selectRun(runId) {
+        var run = runHistory.find(function(r) { return r.id === runId; });
+        if (!run) return;
+        activeRunId = runId;
+        renderRunHistory();
+        renderScores(run.scores);
+        renderViolations(run.violations, run.allPassed);
+        renderGraph(run.graph);
+        setStatus('Viewing run ' + runId, false);
+    }
+
+    function resetAll() {
+        // Clear graph
+        if (graph3d) {
+            try { graph3d._destructor(); } catch(e) {}
+            graph3d = null;
+        }
+        var el = document.getElementById('graph-3d');
+        while (el.firstChild) el.removeChild(el.firstChild);
+
+        // Show empty state
+        var es = document.getElementById('empty-state');
+        if (es) es.style.display = '';
+
+        // Reset sidebar sections
+        document.getElementById('score-list').innerHTML = '<div class="card"><div class="meta">Run a pipeline to see entailment scores.</div></div>';
+        document.getElementById('llm-output').innerHTML = '<div class="card"><div class="meta">No output yet.</div></div>';
+        document.getElementById('violation-list').innerHTML = '<div class="card"><div class="meta">No data yet.</div></div>';
+
+        // Reset progress
+        document.getElementById('progress').classList.remove('visible');
+
+        // Deselect active run
+        activeRunId = null;
+        renderRunHistory();
+
+        setStatus('Ready', false);
+
+        // Re-enable button
+        var btn = document.getElementById('demo-btn');
+        btn.disabled = false;
+        btn.textContent = 'Run Pipeline';
+    }
+
     async function runDemo() {
         var btn = document.getElementById('demo-btn');
         btn.disabled = true; btn.textContent = 'Running...';
+        var pipelineComplete = false;
         setStatus('Starting pipeline...', true);
-        var pipeline = document.getElementById('pipeline-select').value;
-        if (pipeline === 'agent') {
-            showProgress(['Planning query','Tool call & retrieval','Evaluating evidence','Synthesizing answer','Running entailment judge','Building causal graph']);
-        } else {
-            showProgress(['Embedding query & documents','Retrieving relevant chunks','Calling LLM','Running entailment judge','Building causal graph']);
-        }
+        showProgress(['Planning query','Tool call & retrieval','Evaluating evidence','Synthesizing answer','Running entailment judge','Building causal graph']);
         updateProgress(0);
 
         try {
@@ -638,7 +716,8 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
             var buffer = '';
 
             while (true) {
-                var result = await reader.read();
+                var result;
+                try { result = await reader.read(); } catch(e) { break; }
                 if (result.done) break;
                 buffer += decoder.decode(result.value, { stream: true });
 
@@ -650,34 +729,19 @@ FastAPI is a modern Python web framework based on Starlette.</textarea>
                     if (line.indexOf('data: ') === 0) {
                         try {
                             var data = JSON.parse(line.substring(6));
-                            if (handleSSEData(data, btn)) return;
+                            if (handleSSEData(data, btn)) { pipelineComplete = true; }
                         } catch(e) {}
                     }
                 }
+                if (pipelineComplete) break;
             }
+            try { reader.cancel(); } catch(e) {}
         } catch(err) {
-            setStatus('Error: ' + err.message, false);
+            if (!pipelineComplete) setStatus('Error: ' + err.message, false);
         }
-        btn.disabled = false; btn.textContent = 'Run Pipeline';
+        if (!pipelineComplete) { btn.disabled = false; btn.textContent = 'Run Pipeline'; }
     }
 
-    function loadRun() {
-        var runId = document.getElementById('run-id').value.trim();
-        if (!runId) return;
-        setStatus('Loading run ' + runId + '...', true);
-        fetch(API + '/runs/' + runId + '/graph')
-            .then(function(r) { if (!r.ok) throw new Error('Run not found'); return r.json(); })
-            .then(function(g) {
-                renderGraph(g);
-                return fetch(API + '/runs/' + runId + '/constraints');
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(c) {
-                renderViolations(c.violations, c.all_passed);
-                setStatus('Loaded run ' + runId, false);
-            })
-            .catch(function(err) { setStatus('Error: ' + err.message, false); });
-    }
 
     </script>
 </body>

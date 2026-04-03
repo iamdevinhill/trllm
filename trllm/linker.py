@@ -43,7 +43,7 @@ class EntailmentLinker:
     def __init__(
         self,
         ollama: OllamaAdapter,
-        judge_model: str = "qwen3:30b",
+        judge_model: str = "qwen3:8b",
     ):
         self.ollama = ollama
         self.judge_model = judge_model

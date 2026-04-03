@@ -55,8 +55,8 @@ class CausalGraphBuilder:
                 if confidence >= self.linker.confidence_threshold:
                     cause_re = rapide_events[cause_event.id]
                     effect_re = rapide_events[response_event.id]
-                    # Avoid duplicate edges (may already exist from explicit caused_by)
-                    if not poset.is_ancestor(cause_re, effect_re):
+                    # Avoid duplicate edges and cycles
+                    if not poset.is_ancestor(cause_re, effect_re) and not poset.is_ancestor(effect_re, cause_re):
                         poset.add_causal_link(cause_re, effect_re)
 
         # Phase 4: Build Computation

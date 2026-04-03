@@ -137,14 +137,14 @@ async def get_constraint_violations(run_id: str):
 
 
 DEMO_DOCUMENTS = [
-    {"id": "doc1", "text": "Python was created by Guido van Rossum and first released in 1991."},
-    {"id": "doc2", "text": "The capital of France is Paris, known for the Eiffel Tower."},
-    {"id": "doc3", "text": "Machine learning is a subset of artificial intelligence."},
-    {"id": "doc4", "text": "Tennessee is known as the Volunteer State."},
-    {"id": "doc5", "text": "FastAPI is a modern Python web framework based on Starlette."},
+    {"id": "doc1", "text": "Mars has two small moons called Phobos and Deimos, discovered by Asaph Hall in 1877."},
+    {"id": "doc2", "text": "Jupiter is the largest planet in our solar system with at least 95 known moons."},
+    {"id": "doc3", "text": "Phobos orbits Mars at a distance of only 6,000 km and is slowly spiraling inward."},
+    {"id": "doc4", "text": "Mars has three moons: Phobos, Deimos, and Titan."},
+    {"id": "doc5", "text": "The Martian surface features Olympus Mons, the tallest volcano in the solar system."},
 ]
 
-DEMO_LLM_MODEL = "qwen3:30b"
+DEMO_LLM_MODEL = "qwen3:8b"
 DEMO_EMBED_MODEL = "qwen3-embedding:0.6b"
 
 
@@ -157,12 +157,12 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class DemoRequest(BaseModel):
-    query: str = "What year was Python created and who made it?"
+    query: str = "How many moons does Mars have and what are their names?"
     documents: list[dict] | None = None
     top_k: int = 3
     llm_model: str = DEMO_LLM_MODEL
     embed_model: str = DEMO_EMBED_MODEL
-    pipeline: str = "rag"  # "rag" or "agent"
+    pipeline: str = "agent"
 
 
 def _emit(step, data):
@@ -398,22 +398,7 @@ async def _agent_pipeline(req, documents):
     )
     events.append(tool_call_event)
 
-    tool_prompt = (
-        f"You are a knowledge lookup tool. Provide 2-3 brief factual statements relevant to "
-        f"this query. Only state facts, no opinions.\n\nQuery: {user_query}\n\nFacts:"
-    )
-    tool_llm_result = await ollama.generate(req.llm_model, tool_prompt)
-    tool_output = tool_llm_result["response"]
-
-    tool_result_event = CLEvent(
-        event_type=EventType.TOOL_RESULT,
-        payload={"tool": "knowledge_lookup", "text": tool_output},
-        source="agent",
-        caused_by=[tool_call_event],
-    )
-    events.append(tool_result_event)
-
-    # Step 2b: Retrieval branch (parallel with tool call in the graph)
+    # Step 2b: Retrieval branch (parallel with tool call)
     retrieval_event = CLEvent(
         event_type=EventType.RETRIEVAL_REQUEST,
         payload={"query": user_query},
@@ -422,17 +407,34 @@ async def _agent_pipeline(req, documents):
     )
     events.append(retrieval_event)
 
-    yield _emit("status", {"message": "Embedding query and documents..."})
+    # Run tool call and embedding in parallel
+    async def _tool_call():
+        tool_prompt = (
+            f"You are a knowledge lookup tool. Provide 2-3 brief factual statements relevant to "
+            f"this query. Only state facts, no opinions.\n\nQuery: {user_query}\n\nFacts:"
+        )
+        result = await ollama.generate(req.llm_model, tool_prompt)
+        return result["response"]
 
-    query_embedding = await ollama.embed(req.embed_model, user_query)
-    scored_docs = []
-    for doc in documents:
-        doc_embedding = await ollama.embed(req.embed_model, doc["text"])
-        sim = _cosine_similarity(query_embedding, doc_embedding)
-        scored_docs.append((doc, sim))
+    async def _retrieve():
+        query_embedding = await ollama.embed(req.embed_model, user_query)
+        scored = []
+        for doc in documents:
+            doc_embedding = await ollama.embed(req.embed_model, doc["text"])
+            sim = _cosine_similarity(query_embedding, doc_embedding)
+            scored.append((doc, sim))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:req.top_k]
 
-    scored_docs.sort(key=lambda x: x[1], reverse=True)
-    top_chunks = scored_docs[:req.top_k]
+    tool_output, top_chunks = await asyncio.gather(_tool_call(), _retrieve())
+
+    tool_result_event = CLEvent(
+        event_type=EventType.TOOL_RESULT,
+        payload={"tool": "knowledge_lookup", "text": tool_output},
+        source="agent",
+        caused_by=[tool_call_event],
+    )
+    events.append(tool_result_event)
 
     yield _emit("retrieval", {
         "message": f"Retrieved top {len(top_chunks)} chunks",

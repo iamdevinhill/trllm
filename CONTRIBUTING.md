@@ -25,7 +25,7 @@ All tests use mocked Ollama calls — no running Ollama instance required.
 You'll need [Ollama](https://ollama.ai) running locally:
 
 ```bash
-ollama pull qwen3:30b
+ollama pull qwen3:8b
 ollama pull qwen3-embedding:0.6b
 python demo/demo_pipeline.py
 ```
