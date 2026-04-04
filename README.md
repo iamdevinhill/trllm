@@ -6,8 +6,6 @@ TRLLM answers two questions about your LLM pipeline runs: **which root cause is 
 
 Built on [PyRapide](https://pypi.org/project/pyrapide/) — a causal event-driven architecture library that models distributed systems as causal DAGs.
 
-![TRLLM](trllm.png)
-
 ## The Problem
 
 You're running multi-step LLM pipelines — retrieval, reasoning, tool calls, agent handoffs — and the bill is growing. Existing observability tools show you total token counts. They can't tell you:
@@ -252,7 +250,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Unit tests (128 tests, no external dependencies)
+# Unit tests (143 tests, no external dependencies)
 pytest tests/cost_forensics/ -v --ignore=tests/cost_forensics/test_live_ollama.py
 
 # Coverage
@@ -278,7 +276,7 @@ pip install openai
 python demo/live_query_demo.py
 ```
 
-If Ollama is not running, the live tests skip automatically — CI only runs the 128 unit tests.
+If Ollama is not running, the live tests skip automatically — CI only runs the 143 unit tests.
 
 ## License
 
