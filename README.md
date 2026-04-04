@@ -1,4 +1,10 @@
-# TRLLM
+```
+ _____ ____  _     _     __  __
+|_   _|  _ \| |   | |   |  \/  |
+  | | | |_) | |   | |   | |\/| |
+  | | |  _ <| |___| |___| |  | |
+  |_| |_| \_\_____|_____|_|  |_|
+```
 
 Causal cost attribution and waste detection for LLM/agent pipelines.
 
