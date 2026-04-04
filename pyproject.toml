@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "trllm"
-version = "0.1.0"
-description = "Causal tracing for LLM/agent pipelines"
+version = "0.2.0"
+description = "Causal cost attribution and waste detection for LLM/agent pipelines"
 license = "MIT"
 authors = [
     {name = "Devin Hill"},
@@ -17,12 +21,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "pyrapide>=0.2.1",
-    "fastapi>=0.110.0",
-    "uvicorn>=0.27.0",
-    "httpx>=0.27.0",
-    "numpy>=1.26.0",
-    "sse-starlette>=1.6.0",
+    "pyrapide>=0.3.0",
 ]
 
 [project.urls]
@@ -31,15 +30,30 @@ Repository = "https://github.com/iamdevinhill/trllm"
 Issues = "https://github.com/iamdevinhill/trllm/issues"
 
 [project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.30.0"]
+bedrock = ["boto3>=1.28.0"]
+langchain = ["langchain-core>=0.2.0"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "mypy>=1.10.0",
     "ruff>=0.3.0",
 ]
+
+[project.scripts]
+trllm-cost-forensics = "trllm.cost_forensics.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["trllm*"]
 
-[build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.build_meta"
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+
+[tool.mypy]
+strict = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88

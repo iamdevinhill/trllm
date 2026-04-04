@@ -1,218 +1,284 @@
 # TRLLM
 
-Causal tracing for LLM and agent pipelines.
+Causal cost attribution and waste detection for LLM/agent pipelines.
 
-TRLLM reconstructs **causal relationships** in LLM pipeline executions. Unlike tracing tools that capture chronological spans, TRLLM answers: *which inputs actually caused which outputs?*
+TRLLM answers two questions about your LLM pipeline runs: **which root cause is responsible for what fraction of the total bill**, and **where is money being wasted?**
 
-Built on [PyRapide](https://pypi.org/project/pyrapide/) — a causal event-driven architecture library based on Stanford's RAPIDE 1.0 specification.
+Built on [PyRapide](https://pypi.org/project/pyrapide/) — a causal event-driven architecture library that models distributed systems as causal DAGs.
 
-![TRLLM Dashboard](trllm.png)
+![TRLLM](trllm.png)
 
 ## The Problem
 
-When an LLM agent pipeline runs (retrieval → reasoning → tool calls → synthesis), existing observability tools show you a timeline. They cannot tell you:
+You're running multi-step LLM pipelines — retrieval, reasoning, tool calls, agent handoffs — and the bill is growing. Existing observability tools show you total token counts. They can't tell you:
 
-- Which retrieval chunk actually influenced the final output
-- Whether a tool call was causally relevant or dead weight
-- What the minimum causal path from query to answer looks like
-- If you removed a data source, which outputs would lose their grounding
+- Which agent branch caused 80% of the cost
+- Whether that retry storm on the DB tool wasted $0.50
+- That two LLM calls sent nearly identical 12k-token contexts
+- That an entire agent branch was abandoned and its work was never consumed
 
-TRLLM fills this gap by modeling pipeline executions as **causal posets** — directed acyclic graphs where edges represent causal influence, not just temporal sequence.
-
-## How It Works
-
-1. **Instrument** your LLM pipeline to emit `CLEvent` objects at each step (query, retrieval, chunk injection, LLM call, tool use, final response)
-2. **Build** a causal graph — explicit causal links from your pipeline + inferred links from the **Entailment Linker**, which uses an LLM judge to verify whether specific claims in the output actually came from each input
-3. **Query** the graph — trace causes, find dead nodes, compute shortest causal paths, run counterfactual analysis
-4. **Enforce constraints** — declarative rules like "every output must be grounded in at least one retrieved chunk"
+TRLLM fills this gap by walking the **causal DAG** of your pipeline execution and attributing every dollar to the root cause that triggered it.
 
 ## Quick Start
 
-### Requirements
+```bash
+pip install -e ".[dev]"
+```
 
-- Python 3.11+
-- [Ollama](https://ollama.ai) running locally (for the demo and entailment judge)
+### Auto-instrument OpenAI
 
-### Install
+```python
+from openai import OpenAI
+from trllm.cost_forensics import PricingRegistry, CostAnnotator, CausalCostRollup, WasteDetector
+from trllm.cost_forensics.adapters.openai import InstrumentedOpenAI
+
+client = InstrumentedOpenAI(OpenAI())
+
+# Use client.chat.completions.create() as normal — calls are recorded automatically
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "What is 2+2?"}],
+)
+
+# Get the causal computation
+comp = client.computation()
+
+# Analyze
+pricing = PricingRegistry.openai()
+annotations = CostAnnotator(pricing).annotate(comp)
+report = CausalCostRollup().rollup(comp, annotations)
+waste = WasteDetector().detect(comp, annotations)
+report.attach_waste(waste)
+
+print(report.ascii_tree())
+print(waste.summary())
+```
+
+### Auto-instrument Anthropic
+
+```python
+from anthropic import Anthropic
+from trllm.cost_forensics.adapters.anthropic import InstrumentedAnthropic
+
+client = InstrumentedAnthropic(Anthropic())
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "What is 2+2?"}],
+)
+
+comp = client.computation()
+# ... same analysis as above with PricingRegistry.anthropic()
+```
+
+### Auto-instrument Bedrock
+
+```python
+import boto3
+from trllm.cost_forensics import PricingRegistry, CostAnnotator, CausalCostRollup
+from trllm.cost_forensics.adapters.bedrock import InstrumentedBedrock
+
+bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
+client = InstrumentedBedrock(bedrock)
+
+response = client.converse(
+    modelId="anthropic.claude-3-5-haiku-20241022-v1:0",
+    messages=[{"role": "user", "content": [{"text": "What is 2+2?"}]}],
+)
+
+# Streaming works too
+stream = client.converse_stream(modelId="meta.llama3-70b-instruct-v1:0", messages=[...])
+for event in stream:
+    ...  # events pass through, usage captured from metadata event
+
+comp = client.computation()
+pricing = PricingRegistry.bedrock()
+# ... analyze as usual
+```
+
+### Manual instrumentation
+
+If you're using a provider without an adapter (Ollama, etc.), record events manually:
+
+```python
+from pyrapide import Computation, Event
+
+comp = Computation()
+root = Event(name="user_request", payload={"prompt": "..."})
+comp.record(root)
+
+llm = Event(name="llm_call", payload={
+    "model": "gpt-4o",
+    "usage": {"input_tokens": 5000, "output_tokens": 500},
+})
+comp.record(llm, caused_by=[root])
+# ... continue recording your pipeline
+```
+
+### Async & Streaming
+
+All adapters have async variants and support `stream=True`:
+
+```python
+from openai import AsyncOpenAI
+from trllm.cost_forensics.adapters.openai_async import AsyncInstrumentedOpenAI
+
+client = AsyncInstrumentedOpenAI(AsyncOpenAI())
+response = await client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+
+# Streaming — usage is captured when the stream completes
+stream = client.chat.completions.create(model="gpt-4o", messages=[...], stream=True)
+for chunk in stream:
+    ...  # chunks pass through transparently
+comp = client.computation()  # cost event recorded automatically
+```
+
+### LangChain
+
+Drop in `TrllmCallbackHandler` to instrument any LangChain component — no code changes to your chains or agents:
+
+```python
+from trllm.cost_forensics.adapters.langchain import TrllmCallbackHandler
+
+handler = TrllmCallbackHandler()
+llm = ChatOpenAI(model="gpt-4o", callbacks=[handler])
+llm.invoke("Hello")
+
+comp = handler.computation()
+# ... analyze as usual
+```
+
+## CLI
+
+```bash
+# Analyze a serialized computation
+trllm-cost-forensics analyze comp.json --provider openai
+
+# Fail CI if cost exceeds budget
+trllm-cost-forensics analyze comp.json --budget 0.10
+
+# JSON output for dashboards
+trllm-cost-forensics analyze comp.json --json
+
+# Compare before/after a deploy
+trllm-cost-forensics diff before.json after.json
+```
+
+## Waste Detection
+
+Four built-in patterns that catch real money being burned:
+
+| Pattern | Severity | What it catches |
+|---------|----------|-----------------|
+| **RetryStorm** | high | Same tool called 3+ times under one root |
+| **DeadEndToolCall** | medium | Tool result fetched but never consumed downstream |
+| **RedundantContext** | low | Two LLM calls with <5% difference in input tokens |
+| **AbandonedBranch** | high | Entire agent branch (depth >= 2) whose output was never used |
+
+Custom patterns:
+
+```python
+from trllm.cost_forensics import WastePattern, WasteInstance
+
+class MyPattern(WastePattern):
+    name = "MyPattern"
+    description = "Detects my anti-pattern"
+
+    def detect(self, comp, annotations):
+        return [WasteInstance(...)]
+
+detector = WasteDetector(patterns=[MyPattern()])
+```
+
+## Budget Constraints
+
+Integrate with PyRapide's constraint system for real-time alerts:
+
+```python
+from trllm.cost_forensics import BudgetExceeded, CostPerRootExceeded
+
+# Fail if total > $1.00
+constraint = BudgetExceeded(budget=1.00, pricing=pricing)
+violations = constraint.check(comp)
+
+# Fail if any single root subtree > $0.50
+constraint = CostPerRootExceeded(per_root_budget=0.50, pricing=pricing)
+```
+
+## Cost Diffing
+
+Compare costs across deploys:
+
+```python
+from trllm.cost_forensics import diff_reports
+
+diff = diff_reports(before_report, after_report)
+print(diff.summary())
+# Cost diff: $0.0485 -> $0.0912 (+88.0%)
+# Regressions (1):
+#   ↑ llm_call: $0.0300 -> $0.0712 (+137.3%)
+```
+
+## Architecture
+
+```
+trllm/
+    cost_forensics/
+        pricing.py         # PricingRegistry with OpenAI + Anthropic tables
+        annotator.py       # CostAnnotator — per-event cost calculation
+        rollup.py          # CausalCostRollup — DAG cost attribution
+        waste.py           # WasteDetector + 4 built-in patterns
+        reports.py         # ForensicReport, WasteReport, ASCII tree
+        diff.py            # CostDiff for before/after comparison
+        constraints.py     # Budget constraints (PyRapide integration)
+        cli.py             # CLI entry point
+        adapters/
+            openai.py          # Sync OpenAI adapter
+            openai_async.py    # Async OpenAI adapter
+            anthropic.py       # Sync Anthropic adapter
+            anthropic_async.py # Async Anthropic adapter
+            bedrock.py         # AWS Bedrock adapter (converse + converse_stream)
+            streaming.py       # Stream wrappers (sync + async)
+            langchain.py       # LangChain callback handler
+```
+
+## Testing
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+
+# Unit tests (128 tests, no external dependencies)
+pytest tests/cost_forensics/ -v --ignore=tests/cost_forensics/test_live_ollama.py
+
+# Coverage
+pytest tests/cost_forensics/ --cov=trllm.cost_forensics --cov-report=term-missing --ignore=tests/cost_forensics/test_live_ollama.py
+
+# Type checking
+mypy trllm/cost_forensics/ --strict
 ```
 
-### Pull Ollama Models
+### Live integration tests (Ollama)
+
+The live test suite uses [Ollama](https://ollama.com/) because it is **free and runs locally** — no API keys, no token costs, no rate limits. This makes it practical to run real LLM calls in tests without incurring charges. The tests assign simulated prices to verify cost math works correctly with real, nondeterministic token counts.
+
+Ollama is a testing convenience, not a target use case. In production, you'd use the OpenAI, Anthropic, or LangChain adapters with real pricing.
 
 ```bash
-ollama pull qwen3:8b              # LLM for demo pipeline
-ollama pull qwen3-embedding:0.6b   # Embeddings for retrieval in demo
+# Requires: Ollama running locally with qwen3:0.6b pulled
+ollama pull qwen3:0.6b
+pytest tests/cost_forensics/test_live_ollama.py -v
+
+# Live demo (also requires Ollama + pip install openai)
+pip install openai
+python demo/live_query_demo.py
 ```
 
-### Run the Dashboard
-
-```bash
-uvicorn trllm.api.server:app --reload
-```
-
-Open `http://localhost:8000/dashboard`, enter your own query and documents (or use the defaults), and click **Run Pipeline**. The agent pipeline plans the query, runs tool calls and retrieval in parallel, evaluates evidence, and synthesizes an answer. The dashboard streams progress in real time via SSE and renders an interactive 3D force-directed graph you can orbit, zoom, and click to trace causal ancestry.
-
-### Run with Docker
-
-```bash
-docker compose up --build
-```
-
-The container exposes port 8000 and connects to Ollama on the host via `OLLAMA_HOST`.
-
-### Run the CLI Demo
-
-```bash
-python demo/demo_pipeline.py
-```
-
-This runs the same agent pipeline as the dashboard: query planning, parallel tool call + retrieval, evidence evaluation, synthesis, and entailment scoring. Output shows which inputs were causally relevant, which were dead weight, and whether any constraints were violated.
-
-**Reading the output:**
-- **CAUSAL** — the LLM judge determined that specific claims in the output came from this input (e.g. "Phobos and Deimos" and "Asaph Hall in 1877" trace back to doc1).
-- **DEAD** — this input was present in the prompt but no specific information from it appears in the output. Dead weight.
-- **HALLUCINATED_AGAINST** — the output directly contradicts a fact in this input (negative confidence score).
-- **Confidence scores** reflect the judge's assessment of how strongly the input contributed to the output.
-
-### Run Tests
-
-```bash
-pytest tests/ -v
-```
-
-Tests use mocked Ollama calls — no running Ollama instance required.
-
-## Dashboard
-
-The built-in dashboard at `/dashboard` provides:
-
-- **Custom inputs** — enter your own query, paste your own documents (one per line), choose LLM/embed models, and set top-K retrieval count
-- **Agent pipeline** — multi-step branching graph: planning LLM, parallel tool call + retrieval, evidence evaluation, synthesis LLM
-- **3D causal graph** — interactive force-directed graph (Three.js + 3d-force-graph) with glowing nodes, orbit controls, and animated causal flow particles
-- **Causal ancestry tracing** — click any node to highlight its full causal ancestry with a camera fly-to
-- **Streaming execution** — real-time SSE progress updates as the pipeline runs
-- **Entailment scores** — sidebar showing per-chunk causal/dead/hallucinated verdicts with confidence bars
-- **Constraint violations** — live constraint checking results
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/ingest` | Submit a pipeline run (events) for causal analysis |
-| `POST` | `/query` | Query the causal graph (`what_caused`, `dead_nodes`, `min_path`, `counterfactual`) |
-| `GET` | `/runs/{id}/visualization` | Get Mermaid, ASCII, or DOT visualization |
-| `GET` | `/runs/{id}/constraints` | Check constraint violations |
-| `GET` | `/runs/{id}/graph` | Get graph nodes and edges for visualization |
-| `POST` | `/demo/run` | Run a pipeline with custom query/documents (SSE stream) |
-| `GET` | `/dashboard` | Interactive 3D causal trace viewer |
-
-## Project Structure
-
-```
-trllm/
-├── trllm/
-│   ├── tracer.py          # High-level Tracer SDK
-│   ├── events.py          # CLEvent schema, 17 EventType values
-│   ├── graph.py           # CausalGraphBuilder → PyRapide Computation
-│   ├── linker.py          # EntailmentLinker (LLM judge-based causal verification)
-│   ├── constraints.py     # Pipeline constraints via PyRapide patterns
-│   ├── adapters/
-│   │   └── ollama.py      # Async Ollama HTTP adapter (supports OLLAMA_HOST env var)
-│   ├── api/
-│   │   ├── models.py      # Pydantic request/response models
-│   │   └── server.py      # FastAPI endpoints + SSE demo runner
-│   └── visualization/
-│       └── renderer.py    # PyRapide visualization wrappers
-├── demo/
-│   └── demo_pipeline.py   # End-to-end agent pipeline demo (CLI)
-├── tests/                 # 45 tests (all mocked, no Ollama needed)
-├── dashboard/
-│   └── index.html         # 3D force-directed causal graph viewer
-├── Dockerfile
-├── docker-compose.yml
-└── pyproject.toml
-```
-
-## Instrumenting Your Own Pipeline
-
-Use the `Tracer` SDK to add causal tracing to any pipeline:
-
-```python
-import asyncio
-from trllm import Tracer
-
-async def my_pipeline():
-    async with Tracer(llm_model="qwen3:8b") as tracer:
-        with tracer.trace() as t:
-            # Record each step of your pipeline
-            t.query("How many moons does Mars have and what are their names?")
-            t.chunk("doc1", "Mars has two small moons called Phobos and Deimos, discovered in 1877.")
-            t.chunk("doc2", "Mars has three moons: Phobos, Deimos, and Titan.")
-            t.tool_call("lookup", input="mars moons", output="Mars has two moons: Phobos and Deimos.")
-            t.llm_call(prompt="Context: ... Question: How many moons does Mars have?", response="Mars has two moons: Phobos and Deimos...")
-            t.response("Mars has two moons: Phobos and Deimos.")
-
-        # Analyze: builds causal graph, runs entailment judge, checks constraints
-        result = await tracer.analyze()
-
-        for s in result.scores:
-            print(f"[{s['verdict']}] {s['chunk_id']}: {s['confidence']:+.2f}")
-        for v in result.violations:
-            print(f"VIOLATION: {v}")
-
-asyncio.run(my_pipeline())
-```
-
-The `Tracer` handles all the wiring: event creation, causal linking, graph construction, entailment scoring, and constraint checking. Each method (`query`, `chunk`, `tool_call`, `llm_call`, `response`, `reasoning`, `agent_delegate`) records an event and automatically links it to the previous step. You can also pass explicit `caused_by` lists for custom causal structures.
-
-For advanced use cases, the lower-level `CLEvent`, `CausalGraphBuilder`, `EntailmentLinker`, and `check_constraints` APIs are still available.
-
-## Event Types
-
-TRLLM supports 17 event types covering the full lifecycle of agent pipelines:
-
-| Category | Event Type | Description |
-|----------|-----------|-------------|
-| Pipeline | `PIPELINE_START`, `PIPELINE_END` | Pipeline lifecycle boundaries |
-| User | `USER_QUERY`, `FINAL_RESPONSE` | Input from user, final output to user |
-| Retrieval | `RETRIEVAL_REQUEST`, `RETRIEVAL_RESULT` | Vector search request and raw results |
-| Retrieval | `CHUNK_SELECTED`, `CHUNK_INJECTED` | Chunk picked from results, chunk added to prompt |
-| LLM | `LLM_REQUEST`, `LLM_RESPONSE`, `PROMPT_ASSEMBLED` | Full LLM call lifecycle |
-| Tools | `TOOL_CALL`, `TOOL_RESULT` | Tool invocation and its output |
-| Agents | `AGENT_DELEGATE`, `AGENT_RESPONSE` | Sub-agent delegation and response |
-| Reasoning | `REASONING_STEP`, `SYNTHESIS` | Chain-of-thought steps, final synthesis |
-
-## Key Concepts
-
-**Entailment Linker** — The core differentiator. Instead of cosine similarity (which only measures topical overlap — a hallucinated response about Python scores just as high as a grounded one), the linker uses an LLM judge to trace each specific claim in the response back to its source chunk. This catches:
-- **True grounding** — "response says Phobos and Deimos, chunk says Phobos and Deimos" → CAUSAL
-- **Dead weight** — chunk about Olympus Mons, response doesn't use it → DEAD
-- **Hallucination** — "response says two moons, chunk says three moons including Titan" → HALLUCINATED_AGAINST (negative score)
-
-One judge call evaluates all chunks at once. The same model used for generation can serve as the judge.
-
-**Causal Graph Builder** — Combines explicit causal links (from your pipeline instrumentation) with inferred links (from the entailment linker) into a PyRapide `Computation`. Supports both Engine-driven (live) and post-hoc (recorded) graph construction.
-
-**Constraints** — Declarative rules using PyRapide's pattern algebra (`>>` for causal sequence):
-- Every final output must be grounded in a retrieved chunk
-- Every tool call must produce a result
-- Every LLM response must have a preceding request
-
-Constraints are **context-aware** — they only fire when the relevant event types are present. A `tool_completion` constraint won't trigger in a pipeline that never makes tool calls.
-
-## Tech Stack
-
-- **PyRapide** — causal event modeling (posets, patterns, constraints, visualization)
-- **Ollama** — local LLM inference + embeddings
-- **FastAPI** — async API layer with SSE streaming
-- **Three.js / 3d-force-graph** — interactive 3D causal graph visualization
-- **httpx** — async HTTP client
-- **numpy** — cosine similarity (retrieval in demo)
-- **Docker** — containerized deployment
+If Ollama is not running, the live tests skip automatically — CI only runs the 128 unit tests.
 
 ## License
 
